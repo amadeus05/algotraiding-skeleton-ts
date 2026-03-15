@@ -28,6 +28,8 @@ async function main(): Promise<void> {
         const endTime = backtestConfig.endTime;
         const historicalMarketDataService = container.get<HistoricalMarketDataService>(TYPES.HistoricalMarketDataService);
 
+        const htfTimeframe = backtestConfig.htfTimeframe;
+
         for (const symbol of symbols) {
             await historicalMarketDataService.ensureHistoricalRange({
                 symbol,
@@ -35,6 +37,14 @@ async function main(): Promise<void> {
                 startTime,
                 endTime
             });
+            if (htfTimeframe && htfTimeframe !== interval) {
+                await historicalMarketDataService.ensureHistoricalRange({
+                    symbol,
+                    interval: htfTimeframe,
+                    startTime,
+                    endTime
+                });
+            }
         }
 
         const simulationExchange = container.get<SimulationExchange>(TYPES.SimulationExchange);
@@ -49,7 +59,7 @@ async function main(): Promise<void> {
             })
         );
         const snapshot = portfolioManager.getSnapshot(endTime);
-        const higherTimeframe = process.env.HTF_TIMEFRAME;
+        const higherTimeframe = backtestConfig.htfTimeframe;
 
         console.log("");
         console.log(renderBacktestReport({

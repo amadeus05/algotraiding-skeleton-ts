@@ -10,7 +10,7 @@ export class ShortStrategy extends BaseStrategy {
     private readonly config: ShortStrategyConfig;
 
     constructor(config: Partial<ShortStrategyConfig> = {}) {
-        super();
+        super({ aggressiveMode: config.aggressiveMode });
         this.config = { ...DefaultShortConfig, ...config };
     }
 
@@ -185,41 +185,50 @@ export class ShortStrategy extends BaseStrategy {
         regime: RegimeAnalysis
     ): { shouldExit: boolean; reason?: string } {
         const { candle, history } = context;
+
+        // Protective SL/TP обрабатываются централизованно в BotRunner до вызова strategy.evaluate.
+        // Здесь только discretionary exit conditions.
+
         const currentPrice = candle.close;
 
-        // 1. Stop loss hit
-        if (currentPrice >= position.stopLossPrice!) {
-            return { shouldExit: true, reason: "Stop loss hit" };
-        }
-
-        // 2. Take profit hit
-        if (position.takeProfitPrice && currentPrice <= position.takeProfitPrice) {
-            return { shouldExit: true, reason: "Take profit hit" };
-        }
-
-        // 3. Trend reversal - fast EMA crosses above slow EMA
+        // 1. Trend reversal to bullish (discretionary) — с 3 guard'ами против premature exit
         if (!trend.isBearish) {
-            return { shouldExit: true, reason: "Trend reversal to bullish" };
+            const pnlPercent = this.getUnrealizedPnlPercent(position, currentPrice);
+            const candlesSinceEntry = this.getCandlesSinceEntry(history, position.openedAt);
+
+            const pnlOk = pnlPercent >= this.config.minProfitForReversalExitPercent;
+            const holdingOk = candlesSinceEntry >= this.config.minHoldingCandlesBeforeReversalExit;
+            const reversalConfirmed = this.isReversalConfirmed(
+                history,
+                this.config.emaFastPeriod,
+                this.config.emaSlowPeriod,
+                this.config.reversalConfirmationCandles,
+                (t) => !t.isBearish
+            );
+
+            if (pnlOk && holdingOk && reversalConfirmed) {
+                return { shouldExit: true, reason: "Trend reversal to bullish" };
+            }
         }
 
-        // 4. RSI oversold (potential bottom)
+        // 2. RSI oversold (potential bottom)
         const rsi = this.getRSI(history, this.config.rsiPeriod);
         if (rsi < 25) {
             return { shouldExit: true, reason: `RSI oversold at ${rsi.toFixed(1)}` };
         }
 
-        // 5. Short squeeze warning - rapid price increase with volume
+        // 3. Short squeeze warning - rapid price increase with volume
         const priceChange = (currentPrice - position.entryPrice) / position.entryPrice;
         if (priceChange > 0.03 && this.hasVolumeConfirmation(candle, history, 1.5)) {
             return { shouldExit: true, reason: `Short squeeze warning: +${(priceChange * 100).toFixed(2)}%` };
         }
 
-        // 6. Accumulation phase detected
+        // 4. Accumulation phase detected
         if (regime.regime === "accumulation") {
             return { shouldExit: true, reason: "Accumulation phase detected" };
         }
 
-        // 7. Time-based exit - if short has been open too long in ranging market
+        // 5. Time-based exit - if short has been open too long in ranging market
         const positionAge = candle.timestamp - position.openedAt;
         const hoursOpen = positionAge / (1000 * 60 * 60);
         if (hoursOpen > 48 && regime.isRanging) {

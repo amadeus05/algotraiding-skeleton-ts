@@ -3,15 +3,15 @@ import { Candle } from "../../core/types/common";
 import { Position, StrategySignal } from "../../core/types/trading";
 import { TechnicalIndicators } from "./utils/TechnicalIndicators";
 import { TrendAnalyzer, TrendAnalysis } from "./modules/TrendAnalyzer";
-import { RegimeDetector, RegimeAnalysis } from "./modules/RegimeDetector";
+import { RegimeDetector, RegimeAnalysis, RegimeDetectorConfig } from "./modules/RegimeDetector";
 
 export abstract class BaseStrategy implements StrategyContract {
     protected readonly trendAnalyzer: TrendAnalyzer;
     protected readonly regimeDetector: RegimeDetector;
 
-    constructor() {
+    constructor(regimeConfig?: RegimeDetectorConfig) {
         this.trendAnalyzer = new TrendAnalyzer();
-        this.regimeDetector = new RegimeDetector();
+        this.regimeDetector = new RegimeDetector(regimeConfig);
     }
 
     public abstract evaluate(context: StrategyContext): StrategySignal;
@@ -133,5 +133,37 @@ export abstract class BaseStrategy implements StrategyContract {
         const stopDistance = Math.abs(currentPrice - stopPrice);
 
         return { stopPrice, stopDistance };
+    }
+
+    /** Unrealized PnL в процентах (для long: (price-entry)/entry*100, для short: (entry-price)/entry*100) */
+    protected getUnrealizedPnlPercent(position: Position, currentPrice: number): number {
+        if (position.side === "long") {
+            return ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+        }
+        return ((position.entryPrice - currentPrice) / position.entryPrice) * 100;
+    }
+
+    /** Количество полных свечей, прошедших после входа (timestamp > openedAt) */
+    protected getCandlesSinceEntry(history: Candle[], openedAt: number): number {
+        return history.filter((c) => c.timestamp > openedAt).length;
+    }
+
+    /** Reversal подтверждён N свечами подряд (каждая из последних N показывает reversal) */
+    protected isReversalConfirmed(
+        history: Candle[],
+        emaFastPeriod: number,
+        emaSlowPeriod: number,
+        confirmationCandles: number,
+        reversalCheck: (t: TrendAnalysis) => boolean
+    ): boolean {
+        const minLength = Math.max(emaSlowPeriod, 50) + confirmationCandles;
+        if (history.length < minLength) return false;
+
+        for (let i = 0; i < confirmationCandles; i++) {
+            const slice = i === 0 ? history : history.slice(0, -i);
+            const trend = this.trendAnalyzer.analyze(slice, emaFastPeriod, emaSlowPeriod);
+            if (!reversalCheck(trend)) return false;
+        }
+        return true;
     }
 }

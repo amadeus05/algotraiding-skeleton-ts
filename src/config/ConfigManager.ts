@@ -36,40 +36,41 @@ export class ConfigManager {
             backtest,
             strategy: {
                 long: {
-                    emaFastPeriod: 20,
-                    emaSlowPeriod: 50,
+                    emaFastPeriod: 21,
+                    emaSlowPeriod: 55,
                     rsiPeriod: 14,
-                    rsiMin: 30,
-                    rsiMax: 70,
-                    volumeSpikeMultiplier: 1.0,
-                    minTrendStrength: 0.15,
-                    pullbackMaxDistance: 0.06,
-                    pullbackMinDistance: 0.001,
-                    stopLossATRMultiplier: 0.8,
-                    takeProfitRR: 1.5,
-                    requireTrendConfirmation: true,
+                    rsiMin: 25,                    // ← было 30
+                    rsiMax: 75,                    // ← было 70
+                    volumeSpikeMultiplier: 1.1,
+                    minTrendStrength: 0.03,        // ← было 0.15 (главный убийца!)
+                    pullbackMaxDistance: 0.12,     // ← было 0.06
+                    pullbackMinDistance: 0.0005,
+                    stopLossATRMultiplier: 1.5,    // ← шире SL
+                    takeProfitRR: 2.5,             // ← было 1.5
+                    requireTrendConfirmation: false, // ← было true
                     requireHigherHighsHigherLows: false
                 },
                 short: {
-                    emaFastPeriod: 50,
-                    emaSlowPeriod: 200,
+                    emaFastPeriod: 21,
+                    emaSlowPeriod: 55,
                     rsiPeriod: 14,
-                    rsiMin: 45,
+                    rsiMin: 35,
                     rsiMax: 85,
-                    volumeSpikeMultiplier: 1.0,
-                    minTrendStrength: 0.2,
-                    bounceMaxDistance: 0.05,
-                    bounceMinDistance: 0.001,
-                    stopLossATRMultiplier: 1.0,
-                    takeProfitRR: 1.5,
-                    requireTrendConfirmation: true,
+                    volumeSpikeMultiplier: 1.1,
+                    minTrendStrength: 0.04,
+                    bounceMaxDistance: 0.10,
+                    bounceMinDistance: 0.0005,
+                    stopLossATRMultiplier: 1.8,
+                    takeProfitRR: 2.5,
+                    requireTrendConfirmation: false,
                     requireLowerHighsLowerLows: false,
                     requireDistribution: false,
                     maxFundingRate: -0.01
                 },
                 priorityMode: "trend_following",
-                minConfidenceThreshold: 0.35,
-                maxActivePositionsPerSide: 1
+                minConfidenceThreshold: 0.25,      // ← было 0.35
+                maxActivePositionsPerSide: 2,
+                aggressiveMode: true               // ← НОВАЯ НАСТРОЙКА (включи!)
             } as DualStrategyConfig,
             risk: {
                 accountBalance: parseFloat(process.env.INITIAL_BALANCE || '1000'),
@@ -78,7 +79,7 @@ export class ConfigManager {
                 maxOpenTrades: this.parsePositiveInteger(process.env.MAX_OPEN_TRADES, 3),
                 leverage: 2,
                 maxDailyLoss: 0.05,
-                maxDrawdown: 0.15,
+                maxDrawdown: 0.55,
                 minRR: 1.5
             } as RiskParameters
         };
@@ -98,9 +99,12 @@ export class ConfigManager {
             throw new Error("BACKTEST_START cannot be greater than BACKTEST_END.");
         }
 
+        const htfTimeframe = (process.env.HTF_TIMEFRAME?.trim() || "4h") as KlineInterval;
+
         return {
             symbol: process.env.BACKTEST_SYMBOL || symbols[0],
             interval: (process.env.BACKTEST_INTERVAL || defaultTimeframe) as BacktestConfig["interval"],
+            htfTimeframe,
             useTestnet: process.env.BACKTEST_USE_TESTNET === 'true',
             startTime,
             endTime,

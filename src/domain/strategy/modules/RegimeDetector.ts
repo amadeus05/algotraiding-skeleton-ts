@@ -12,7 +12,17 @@ export interface RegimeAnalysis {
     description: string;
 }
 
+export interface RegimeDetectorConfig {
+    aggressiveMode?: boolean;
+}
+
 export class RegimeDetector {
+    private readonly config: RegimeDetectorConfig;
+
+    constructor(config?: RegimeDetectorConfig) {
+        this.config = config || {};
+    }
+
     public detect(candles: Candle[], lookback: number = 20): RegimeAnalysis {
         if (candles.length < lookback * 2) {
             return {
@@ -128,14 +138,14 @@ export class RegimeDetector {
     }
 
     public isGoodForLongs(analysis: RegimeAnalysis): boolean {
-        return analysis.regime === "trending_up" ||
-               analysis.regime === "accumulation" ||
-               (analysis.regime === "ranging" && analysis.volatility < 0.02);
+        return this.config.aggressiveMode
+            ? true
+            : (analysis.regime === "trending_up" || analysis.regime === "accumulation");
     }
 
     public isGoodForShorts(analysis: RegimeAnalysis): boolean {
-        return analysis.regime === "trending_down" ||
-               analysis.regime === "distribution" ||
-               (analysis.regime === "volatile" && analysis.volatility > 0.03);
+        return this.config.aggressiveMode
+            ? true
+            : (analysis.regime === "trending_down" || analysis.regime === "distribution");
     }
 }

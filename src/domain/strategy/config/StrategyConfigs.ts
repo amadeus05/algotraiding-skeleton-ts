@@ -1,4 +1,5 @@
 export interface LongStrategyConfig {
+    aggressiveMode?: boolean;
     emaFastPeriod: number;
     emaSlowPeriod: number;
     rsiPeriod: number;
@@ -12,9 +13,16 @@ export interface LongStrategyConfig {
     takeProfitRR: number;
     requireTrendConfirmation: boolean;
     requireHigherHighsHigherLows: boolean;
+    /** Min unrealized PnL % для reversal exit; exit по bearish reversal блокируется при pnl < порога */
+    minProfitForReversalExitPercent: number;
+    /** Min свечей после входа до разрешения reversal-based exit */
+    minHoldingCandlesBeforeReversalExit: number;
+    /** Reversal должен подтвердиться N свечей подряд */
+    reversalConfirmationCandles: number;
 }
 
 export interface ShortStrategyConfig {
+    aggressiveMode?: boolean;
     emaFastPeriod: number;
     emaSlowPeriod: number;
     rsiPeriod: number;
@@ -30,6 +38,12 @@ export interface ShortStrategyConfig {
     requireLowerHighsLowerLows: boolean;
     requireDistribution: boolean;
     maxFundingRate: number; // Don't short if funding too negative (crowded short)
+    /** Min unrealized PnL % для reversal exit; exit по bullish reversal блокируется при pnl < порога */
+    minProfitForReversalExitPercent: number;
+    /** Min свечей после входа до разрешения reversal-based exit */
+    minHoldingCandlesBeforeReversalExit: number;
+    /** Reversal должен подтвердиться N свечей подряд */
+    reversalConfirmationCandles: number;
 }
 
 export const DefaultLongConfig: LongStrategyConfig = {
@@ -45,7 +59,10 @@ export const DefaultLongConfig: LongStrategyConfig = {
     stopLossATRMultiplier: 0.8,
     takeProfitRR: 1.5,
     requireTrendConfirmation: true,
-    requireHigherHighsHigherLows: false
+    requireHigherHighsHigherLows: false,
+    minProfitForReversalExitPercent: 1.0,
+    minHoldingCandlesBeforeReversalExit: 3,
+    reversalConfirmationCandles: 2
 };
 
 export const DefaultShortConfig: ShortStrategyConfig = {
@@ -63,5 +80,8 @@ export const DefaultShortConfig: ShortStrategyConfig = {
     requireTrendConfirmation: true,
     requireLowerHighsLowerLows: false,
     requireDistribution: false,
-    maxFundingRate: -0.01
+    maxFundingRate: -0.01,
+    minProfitForReversalExitPercent: 1.0,
+    minHoldingCandlesBeforeReversalExit: 3,
+    reversalConfirmationCandles: 2
 };

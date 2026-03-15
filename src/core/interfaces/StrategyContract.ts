@@ -6,6 +6,11 @@ export interface StrategyContext {
     timeframe: string;
     candle: Candle;
     history: Candle[];
+
+    /** Optional higher timeframe context */
+    htfTimeframe?: string;
+    htfHistory?: Candle[];
+
     portfolio: PortfolioSnapshot;
     position?: Position;
 }

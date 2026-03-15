@@ -2,13 +2,14 @@ import "reflect-metadata";
 import { Container } from "inversify";
 import { BotRunner } from "./application/BotRunner";
 import { ConfigManager } from "./config/ConfigManager";
+import { IMarketDataRepository } from "./core/interfaces/repositories/IMarketDataRepository";
 import { StrategyContract } from "./core/interfaces/StrategyContract";
 import { HistoricalMarketDataService } from "./core/services/HistoricalMarketDataService";
 import { TYPES } from "./core/types/di.types";
 import { ExecutionPlanner } from "./domain/execution/ExecutionPlanner";
 import { PortfolioManager } from "./domain/execution/PortfolioManager";
 import { RiskManager } from "./domain/risk/RiskManager";
-import { DualStrategy } from "./domain/strategy/DualStrategy";
+import { ShortStrategy } from "./domain/strategy/ShortStrategy";
 import { BinanceAdapter } from "./infrastructure/exchanges/binance/BinanceAdapter";
 import { BinanceService } from "./infrastructure/exchanges/binance/BinanceService";
 import { SimulationExchange } from "./infrastructure/exchanges/simulation/SimulationExchange";
@@ -61,7 +62,7 @@ export function createContainer(): Container {
     container.bind<StrategyContract>(TYPES.Strategy).toDynamicValue(() => {
         const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
         const strategyConfig = configManager.getStrategyConfig();
-        return new DualStrategy(strategyConfig);
+        return new ShortStrategy({ ...strategyConfig.short, aggressiveMode: strategyConfig.aggressiveMode });
     }).inSingletonScope();
 
     container.bind<RiskManager>(TYPES.RiskManager).toDynamicValue(() => {
@@ -80,7 +81,8 @@ export function createContainer(): Container {
     }).inSingletonScope();
 
     container.bind<SimulatedExecutionEngine>(TYPES.ExecutionEngine).toDynamicValue(() =>
-        new SimulatedExecutionEngine()
+        // Binance Futures VIP 0 fees: Maker 0.02%, Taker 0.05%
+        new SimulatedExecutionEngine({ makerFeeRate: 0.0002, takerFeeRate: 0.0005 })
     ).inSingletonScope();
 
     container.bind<PortfolioManager>(TYPES.PortfolioManager).toDynamicValue(() => {
@@ -92,16 +94,22 @@ export function createContainer(): Container {
         new ConsoleNotifier()
     ).inSingletonScope();
 
-    container.bind<BotRunner>(TYPES.BotRunner).toDynamicValue(() =>
-        new BotRunner(
+    container.bind<BotRunner>(TYPES.BotRunner).toDynamicValue(() => {
+        const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+        const backtestConfig = configManager.getBacktestConfig();
+        return new BotRunner(
             container.get<StrategyContract>(TYPES.Strategy),
             container.get<RiskManager>(TYPES.RiskManager),
             container.get<ExecutionPlanner>(TYPES.ExecutionPlanner),
             container.get<SimulatedExecutionEngine>(TYPES.ExecutionEngine),
             container.get<PortfolioManager>(TYPES.PortfolioManager),
-            container.get<ConsoleNotifier>(TYPES.Notifier)
-        )
-    ).inTransientScope();
+            container.get<ConsoleNotifier>(TYPES.Notifier),
+            backtestConfig.htfTimeframe
+                ? container.get<IMarketDataRepository>(TYPES.MarketDataRepository)
+                : undefined,
+            backtestConfig.htfTimeframe
+        );
+    }).inTransientScope();
 
     return container;
 }

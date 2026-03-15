@@ -37,8 +37,16 @@ export class ExecutionPlanner {
             side: signal.side,
             orderType: this.defaultOrderType,
             quantity: riskDecision.quantity,
+
+            // Это reference price сигнала.
+            // Реальная цена исполнения для market-entry должна определяться execution engine
+            // по open следующей свечи.
             entryPrice: signal.entryPrice,
+
+            // Для deferred market entry notional по signal price не является фактическим.
+            // Ниже просто estimate; фактический notional должен считаться от executed price.
             notional: riskDecision.quantity * signal.entryPrice,
+
             leverage: riskDecision.leverage,
             stopLossPrice,
             takeProfitPrice,

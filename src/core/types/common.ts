@@ -65,6 +65,8 @@ export interface HistoricalKlineRequest {
 export interface BacktestConfig {
     symbol: string;
     interval: KlineInterval;
+    /** Higher timeframe для загрузки дополнительных данных (например 4h) */
+    htfTimeframe?: KlineInterval;
     useTestnet: boolean;
     startTime: number;
     endTime: number;
@@ -111,6 +113,7 @@ export interface DualStrategyConfig {
     priorityMode: "balanced" | "trend_following" | "contrarian";
     minConfidenceThreshold: number;
     maxActivePositionsPerSide: number;
+    aggressiveMode?: boolean;
 }
 
 export interface LegacyStrategyConfig {

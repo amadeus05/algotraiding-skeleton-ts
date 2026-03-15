@@ -10,7 +10,7 @@ export class LongStrategy extends BaseStrategy {
     private readonly config: LongStrategyConfig;
 
     constructor(config: Partial<LongStrategyConfig> = {}) {
-        super();
+        super({ aggressiveMode: config.aggressiveMode });
         this.config = { ...DefaultLongConfig, ...config };
     }
 
@@ -166,36 +166,45 @@ export class LongStrategy extends BaseStrategy {
         regime: RegimeAnalysis
     ): { shouldExit: boolean; reason?: string } {
         const { candle, history } = context;
+
+        // Protective SL/TP обрабатываются централизованно в BotRunner до вызова strategy.evaluate.
+        // Здесь только discretionary exit conditions.
+
         const currentPrice = candle.close;
 
-        // 1. Stop loss hit
-        if (currentPrice <= position.stopLossPrice!) {
-            return { shouldExit: true, reason: "Stop loss hit" };
-        }
-
-        // 2. Take profit hit
-        if (position.takeProfitPrice && currentPrice >= position.takeProfitPrice) {
-            return { shouldExit: true, reason: "Take profit hit" };
-        }
-
-        // 3. Trend reversal - fast EMA crosses below slow EMA
+        // 1. Trend reversal to bearish (discretionary) — с 3 guard'ами против premature exit
         if (!trend.isBullish) {
-            return { shouldExit: true, reason: "Trend reversal detected" };
+            const pnlPercent = this.getUnrealizedPnlPercent(position, currentPrice);
+            const candlesSinceEntry = this.getCandlesSinceEntry(history, position.openedAt);
+
+            const pnlOk = pnlPercent >= this.config.minProfitForReversalExitPercent;
+            const holdingOk = candlesSinceEntry >= this.config.minHoldingCandlesBeforeReversalExit;
+            const reversalConfirmed = this.isReversalConfirmed(
+                history,
+                this.config.emaFastPeriod,
+                this.config.emaSlowPeriod,
+                this.config.reversalConfirmationCandles,
+                (t) => !t.isBullish
+            );
+
+            if (pnlOk && holdingOk && reversalConfirmed) {
+                return { shouldExit: true, reason: "Trend reversal to bearish" };
+            }
         }
 
-        // 4. RSI overbought (potential top)
+        // 2. RSI overbought (potential top)
         const rsi = this.getRSI(history, this.config.rsiPeriod);
         if (rsi > 80) {
             return { shouldExit: true, reason: `RSI overbought at ${rsi.toFixed(1)}` };
         }
 
-        // 5. Trailing stop - price extended too far from EMA
+        // 3. Trailing stop - price extended too far from EMA
         const extendedDistance = this.trendAnalyzer.isPriceExtendedFromEMA(history, trend, 0.08);
         if (extendedDistance) {
             return { shouldExit: true, reason: "Price too extended from EMA" };
         }
 
-        // 6. Regime change to distribution or strong downtrend
+        // 4. Regime change to distribution or strong downtrend
         if (regime.regime === "distribution" || regime.regime === "trending_down") {
             return { shouldExit: true, reason: `Regime changed to ${regime.regime}` };
         }

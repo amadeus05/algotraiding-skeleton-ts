@@ -12,6 +12,7 @@ export interface DualStrategyConfig {
     priorityMode: "balanced" | "trend_following" | "contrarian";
     minConfidenceThreshold: number;
     maxActivePositionsPerSide: number;
+    aggressiveMode?: boolean;
 }
 
 export const DefaultDualConfig: DualStrategyConfig = {
@@ -31,10 +32,10 @@ export class DualStrategy implements StrategyContract {
 
     constructor(config: Partial<DualStrategyConfig> = {}) {
         this.config = { ...DefaultDualConfig, ...config };
-        this.longStrategy = new LongStrategy(this.config.long);
-        this.shortStrategy = new ShortStrategy(this.config.short);
+        this.longStrategy = new LongStrategy({ ...this.config.long, aggressiveMode: this.config.aggressiveMode });
+        this.shortStrategy = new ShortStrategy({ ...this.config.short, aggressiveMode: this.config.aggressiveMode });
         this.trendAnalyzer = new TrendAnalyzer();
-        this.regimeDetector = new RegimeDetector();
+        this.regimeDetector = new RegimeDetector({ aggressiveMode: this.config.aggressiveMode });
     }
 
     public evaluate(context: StrategyContext): StrategySignal {
