@@ -8,7 +8,7 @@ import { TYPES } from "./core/types/di.types";
 import { ExecutionPlanner } from "./domain/execution/ExecutionPlanner";
 import { PortfolioManager } from "./domain/execution/PortfolioManager";
 import { RiskManager } from "./domain/risk/RiskManager";
-import { NoopStrategy } from "./domain/strategy/NoopStrategy";
+import { DualStrategy } from "./domain/strategy/DualStrategy";
 import { BinanceAdapter } from "./infrastructure/exchanges/binance/BinanceAdapter";
 import { BinanceService } from "./infrastructure/exchanges/binance/BinanceService";
 import { SimulationExchange } from "./infrastructure/exchanges/simulation/SimulationExchange";
@@ -58,9 +58,11 @@ export function createContainer(): Container {
         new SimulationExchange(container.get<SQLiteKlineRepository>(TYPES.MarketDataRepository))
     ).inSingletonScope();
 
-    container.bind<StrategyContract>(TYPES.Strategy).toDynamicValue(() =>
-        new NoopStrategy()
-    ).inSingletonScope();
+    container.bind<StrategyContract>(TYPES.Strategy).toDynamicValue(() => {
+        const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+        const strategyConfig = configManager.getStrategyConfig();
+        return new DualStrategy(strategyConfig);
+    }).inSingletonScope();
 
     container.bind<RiskManager>(TYPES.RiskManager).toDynamicValue(() => {
         const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
@@ -69,8 +71,11 @@ export function createContainer(): Container {
 
     container.bind<ExecutionPlanner>(TYPES.ExecutionPlanner).toDynamicValue(() => {
         const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+        const strategyConfig = configManager.getStrategyConfig();
+        // Use long takeProfitRR as default (strategies now compute their own take-profit)
+        const defaultTakeProfitRatio = strategyConfig.long?.takeProfitRR ?? 2.0;
         return new ExecutionPlanner({
-            defaultTakeProfitRatio: configManager.getStrategyConfig().takeProfitRatio
+            defaultTakeProfitRatio
         });
     }).inSingletonScope();
 

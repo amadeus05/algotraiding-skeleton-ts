@@ -136,9 +136,14 @@ test("PortfolioManager tracks realized and unrealized pnl with fees", () => {
     });
 
     const afterClose = portfolio.getSnapshot(closedAt);
+    const closedTrades = portfolio.getClosedTrades();
     assert.equal(afterClose.balance, 1048);
     assert.equal(afterClose.realizedPnl, 48);
     assert.equal(afterClose.unrealizedPnl, 0);
     assert.equal(afterClose.dailyPnl, 48);
     assert.equal(afterClose.openTradeCount, 0);
+    assert.equal(closedTrades.length, 1);
+    assert.equal(closedTrades[0].totalFees, 2);
+    assert.equal(closedTrades[0].netPnl, 48);
+    assert.equal(closedTrades[0].closeReason, "Signal exit");
 });

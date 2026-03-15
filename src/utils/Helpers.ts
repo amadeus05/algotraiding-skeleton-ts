@@ -72,3 +72,27 @@ export function normalizeSymbol(symbol: string): string {
 export function normalizeInterval(interval: KlineInterval): KlineInterval {
     return interval.trim() as KlineInterval;
 }
+
+export function formatUtcDateTime(timestamp: number): string {
+    const date = new Date(timestamp);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    const hours = String(date.getUTCHours()).padStart(2, "0");
+    const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+    const seconds = String(date.getUTCSeconds()).padStart(2, "0");
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+export function formatDisplaySymbol(symbol: string): string {
+    const knownQuotes = ["USDT", "USDC", "BUSD", "FDUSD", "BTC", "ETH"];
+
+    for (const quote of knownQuotes) {
+        if (symbol.endsWith(quote) && symbol.length > quote.length) {
+            return `${symbol.slice(0, -quote.length)}/${quote}`;
+        }
+    }
+
+    return symbol;
+}

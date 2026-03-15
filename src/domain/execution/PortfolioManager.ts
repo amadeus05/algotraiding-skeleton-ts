@@ -1,4 +1,4 @@
-import { ExecutedOrder, PortfolioSnapshot, Position } from "../../core/types/trading";
+import { ClosedTrade, ExecutedOrder, PortfolioSnapshot, Position } from "../../core/types/trading";
 
 interface RealizedChangeEvent {
     timestamp: number;
@@ -8,9 +8,12 @@ interface RealizedChangeEvent {
 export class PortfolioManager {
     private balance: number;
     private realizedPnl = 0;
+    private totalFeesPaid = 0;
     private readonly positions = new Map<string, Position>();
+    private readonly closedTrades: ClosedTrade[] = [];
     private readonly realizedChanges: RealizedChangeEvent[] = [];
     private peakEquity: number;
+    private maxDrawdown = 0;
 
     constructor(initialBalance: number) {
         if (!Number.isFinite(initialBalance) || initialBalance <= 0) {
@@ -46,6 +49,18 @@ export class PortfolioManager {
         position.updatedAt = timestamp;
     }
 
+    public getClosedTrades(): ClosedTrade[] {
+        return this.closedTrades.map((trade) => ({ ...trade }));
+    }
+
+    public getTotalFeesPaid(): number {
+        return this.totalFeesPaid;
+    }
+
+    public getMaxDrawdown(): number {
+        return this.maxDrawdown;
+    }
+
     public applyExecution(order: ExecutedOrder): void {
         const fees = order.fees ?? 0;
 
@@ -63,6 +78,8 @@ export class PortfolioManager {
         const equity = this.balance + unrealizedPnl;
 
         this.peakEquity = Math.max(this.peakEquity, equity);
+        const drawdown = this.peakEquity === 0 ? 0 : (this.peakEquity - equity) / this.peakEquity;
+        this.maxDrawdown = Math.max(this.maxDrawdown, drawdown);
 
         return {
             balance: this.balance,
@@ -70,7 +87,7 @@ export class PortfolioManager {
             realizedPnl: this.realizedPnl,
             unrealizedPnl,
             dailyPnl: this.getDailyPnl(now),
-            drawdown: this.peakEquity === 0 ? 0 : (this.peakEquity - equity) / this.peakEquity,
+            drawdown,
             openTradeCount: positions.length,
             positions
         };
@@ -81,6 +98,7 @@ export class PortfolioManager {
             throw new Error(`Position for ${order.symbol} is already open.`);
         }
 
+        this.totalFeesPaid += fees;
         this.balance -= fees;
         this.realizedPnl -= fees;
         this.realizedChanges.push({ timestamp: order.timestamp, amount: -fees });
@@ -111,10 +129,39 @@ export class PortfolioManager {
             ? (order.price - position.entryPrice) * position.quantity
             : (position.entryPrice - order.price) * position.quantity;
         const realizedChange = grossPnl - fees;
+        const entryFees = position.feesPaid;
+        const totalFees = entryFees + fees;
+        const netPnl = grossPnl - totalFees;
+        const notional = position.entryPrice * position.quantity;
+        const margin = position.leverage > 0 ? notional / position.leverage : notional;
+        const pnlPercent = margin > 0 ? (netPnl / margin) * 100 : 0;
+        const closeReason = typeof order.metadata?.closeReason === "string"
+            ? order.metadata.closeReason
+            : "Signal exit";
 
+        this.totalFeesPaid += fees;
         this.balance += realizedChange;
         this.realizedPnl += realizedChange;
         this.realizedChanges.push({ timestamp: order.timestamp, amount: realizedChange });
+        this.closedTrades.push({
+            symbol: position.symbol,
+            side: position.side,
+            quantity: position.quantity,
+            leverage: position.leverage,
+            entryPrice: position.entryPrice,
+            exitPrice: order.price,
+            openedAt: position.openedAt,
+            closedAt: order.timestamp,
+            notional,
+            margin,
+            grossPnl,
+            netPnl,
+            pnlPercent,
+            entryFees,
+            exitFees: fees,
+            totalFees,
+            closeReason
+        });
         this.positions.delete(order.symbol);
     }
 

@@ -76,6 +76,10 @@ function createRiskParameters(overrides: Partial<RiskParameters> = {}): RiskPara
     };
 }
 
+function stripAnsi(value: string): string {
+    return value.replace(/\u001b\[[0-9;]*m/g, "");
+}
+
 test("BotRunner executes strategy -> risk -> planner -> execution -> portfolio chain", () => {
     const candles = [
         createCandle(Date.UTC(2024, 0, 1, 0, 0, 0), 100),
@@ -111,4 +115,6 @@ test("BotRunner executes strategy -> risk -> planner -> execution -> portfolio c
     assert.equal(snapshot.equity, 1050);
     assert.equal(notifier.warnMessages.length, 0);
     assert.equal(notifier.infoMessages.length, 2);
+    assert.match(stripAnsi(notifier.infoMessages[0]), /OPEN LONG/);
+    assert.match(stripAnsi(notifier.infoMessages[1]), /Reason: Signal exit/);
 });

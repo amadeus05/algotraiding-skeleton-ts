@@ -30,6 +30,26 @@ export interface Position {
     feesPaid: number;
 }
 
+export interface ClosedTrade {
+    symbol: string;
+    side: TradeSide;
+    quantity: number;
+    leverage: number;
+    entryPrice: number;
+    exitPrice: number;
+    openedAt: number;
+    closedAt: number;
+    notional: number;
+    margin: number;
+    grossPnl: number;
+    netPnl: number;
+    pnlPercent: number;
+    entryFees: number;
+    exitFees: number;
+    totalFees: number;
+    closeReason: string;
+}
+
 export interface PortfolioSnapshot {
     balance: number;
     equity: number;
@@ -80,6 +100,7 @@ export interface ExecutedOrder {
     fees?: number;
     stopLossPrice?: number;
     takeProfitPrice?: number;
+    metadata?: Record<string, unknown>;
 }
 
 export interface ClosedKlineEvent {

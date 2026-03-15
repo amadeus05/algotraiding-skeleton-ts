@@ -1,6 +1,6 @@
 import { injectable } from "inversify";
 import * as dotenv from 'dotenv';
-import { BacktestConfig, KlineInterval, StrategyConfig, RiskParameters } from "../core/types/common";
+import { BacktestConfig, KlineInterval, DualStrategyConfig, RiskParameters } from "../core/types/common";
 import { parseTimeInput } from "../utils/Helpers";
 dotenv.config();
 
@@ -13,7 +13,7 @@ export class ConfigManager {
     }
 
     public getConfig() { return this.config; }
-    public getStrategyConfig(): StrategyConfig { return this.config.strategy; }
+    public getStrategyConfig(): DualStrategyConfig { return this.config.strategy; }
     public getRiskConfig(): RiskParameters { return this.config.risk; }
     public getBacktestConfig(): BacktestConfig { return this.config.backtest; }
 
@@ -35,25 +35,42 @@ export class ConfigManager {
             timeframe,
             backtest,
             strategy: {
-                emaFast: 50,
-                emaSlow: 200,
-                minTrendStrength: 0.02,
-                rsiPeriod: 14,
-                rsiOverbought: 70,
-                rsiOversold: 30,
-                volumeSpikeMultiplier: 1.5,
-                pullbackToEMA: true,
-                maxPullbackDistance: 0.03,
-                cvdThreshold: 0.5,
-                oiChangeMin: 0.1,
-                checkLiquidations: true,
-                stopLossATRMultiplier: 1.5,
-                takeProfitRatio: 2.5,
-                trailingStop: false,
-                minVolume: 1000000,
-                maxSpread: 0.01,
-                btcSyncRequired: false
-            } as StrategyConfig,
+                long: {
+                    emaFastPeriod: 20,
+                    emaSlowPeriod: 50,
+                    rsiPeriod: 14,
+                    rsiMin: 30,
+                    rsiMax: 70,
+                    volumeSpikeMultiplier: 1.0,
+                    minTrendStrength: 0.15,
+                    pullbackMaxDistance: 0.06,
+                    pullbackMinDistance: 0.001,
+                    stopLossATRMultiplier: 0.8,
+                    takeProfitRR: 1.5,
+                    requireTrendConfirmation: true,
+                    requireHigherHighsHigherLows: false
+                },
+                short: {
+                    emaFastPeriod: 50,
+                    emaSlowPeriod: 200,
+                    rsiPeriod: 14,
+                    rsiMin: 45,
+                    rsiMax: 85,
+                    volumeSpikeMultiplier: 1.0,
+                    minTrendStrength: 0.2,
+                    bounceMaxDistance: 0.05,
+                    bounceMinDistance: 0.001,
+                    stopLossATRMultiplier: 1.0,
+                    takeProfitRR: 1.5,
+                    requireTrendConfirmation: true,
+                    requireLowerHighsLowerLows: false,
+                    requireDistribution: false,
+                    maxFundingRate: -0.01
+                },
+                priorityMode: "trend_following",
+                minConfidenceThreshold: 0.35,
+                maxActivePositionsPerSide: 1
+            } as DualStrategyConfig,
             risk: {
                 accountBalance: parseFloat(process.env.INITIAL_BALANCE || '1000'),
                 riskPerTrade: parseFloat(process.env.RISK_PER_TRADE || '0.01'),

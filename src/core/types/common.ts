@@ -71,7 +71,49 @@ export interface BacktestConfig {
     rangeDays: number;
 }
 
-export interface StrategyConfig {
+export interface LongStrategyConfig {
+    emaFastPeriod: number;
+    emaSlowPeriod: number;
+    rsiPeriod: number;
+    rsiMin: number;
+    rsiMax: number;
+    volumeSpikeMultiplier: number;
+    minTrendStrength: number;
+    pullbackMaxDistance: number;
+    pullbackMinDistance: number;
+    stopLossATRMultiplier: number;
+    takeProfitRR: number;
+    requireTrendConfirmation: boolean;
+    requireHigherHighsHigherLows: boolean;
+}
+
+export interface ShortStrategyConfig {
+    emaFastPeriod: number;
+    emaSlowPeriod: number;
+    rsiPeriod: number;
+    rsiMin: number;
+    rsiMax: number;
+    volumeSpikeMultiplier: number;
+    minTrendStrength: number;
+    bounceMaxDistance: number;
+    bounceMinDistance: number;
+    stopLossATRMultiplier: number;
+    takeProfitRR: number;
+    requireTrendConfirmation: boolean;
+    requireLowerHighsLowerLows: boolean;
+    requireDistribution: boolean;
+    maxFundingRate: number;
+}
+
+export interface DualStrategyConfig {
+    long: LongStrategyConfig;
+    short: ShortStrategyConfig;
+    priorityMode: "balanced" | "trend_following" | "contrarian";
+    minConfidenceThreshold: number;
+    maxActivePositionsPerSide: number;
+}
+
+export interface LegacyStrategyConfig {
     emaFast: number;
     emaSlow: number;
     minTrendStrength: number;
@@ -91,6 +133,8 @@ export interface StrategyConfig {
     maxSpread: number;
     btcSyncRequired: boolean;
 }
+
+export type StrategyConfig = DualStrategyConfig | LegacyStrategyConfig;
 
 export interface RiskParameters {
     accountBalance: number;

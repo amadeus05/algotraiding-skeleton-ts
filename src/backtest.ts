@@ -1,14 +1,15 @@
 import "reflect-metadata";
+import { renderBacktestReport } from "./application/BacktestReporter";
+import { BotRunner } from "./application/BotRunner";
 import { ConfigManager } from "./config/ConfigManager";
 import { KlineInterval } from "./core/types/common";
-import { DatabaseConnection } from "./infrastructure/persistence/DatabaseConnection";
-import { SQLiteKlineRepository } from "./infrastructure/persistence/repositories/SQLiteKlineRepository";
-import { createContainer } from "./inversify.config";
-import { BotRunner } from "./application/BotRunner";
 import { HistoricalMarketDataService } from "./core/services/HistoricalMarketDataService";
 import { TYPES } from "./core/types/di.types";
-import { MigrationService } from "./infrastructure/persistence/MigrationService";
+import { PortfolioManager } from "./domain/execution/PortfolioManager";
+import { DatabaseConnection } from "./infrastructure/persistence/DatabaseConnection";
 import { SimulationExchange } from "./infrastructure/exchanges/simulation/SimulationExchange";
+import { MigrationService } from "./infrastructure/persistence/MigrationService";
+import { createContainer } from "./inversify.config";
 
 async function main(): Promise<void> {
     const container = createContainer();
@@ -25,31 +26,20 @@ async function main(): Promise<void> {
         const interval = backtestConfig.interval as KlineInterval;
         const startTime = backtestConfig.startTime;
         const endTime = backtestConfig.endTime;
-        const marketDataRepository = container.get<SQLiteKlineRepository>(TYPES.MarketDataRepository);
         const historicalMarketDataService = container.get<HistoricalMarketDataService>(TYPES.HistoricalMarketDataService);
-        let totalDownloadedCandles = 0;
-        let totalCachedCandles = 0;
 
         for (const symbol of symbols) {
-            const result = await historicalMarketDataService.ensureHistoricalRange({
+            await historicalMarketDataService.ensureHistoricalRange({
                 symbol,
                 interval,
                 startTime,
                 endTime
             });
-
-            totalDownloadedCandles += result.downloadedCandles;
-            totalCachedCandles += result.cachedCandles;
-            console.log(`[backtest] ${result.symbol} ${result.interval}`);
-            console.log(`[backtest] range ${new Date(result.startTime).toISOString()} -> ${new Date(result.endTime).toISOString()}`);
-            console.log(`[backtest] missing ranges: ${result.missingRanges.length}`);
-            console.log(`[backtest] downloaded candles: ${result.downloadedCandles}`);
-            console.log(`[backtest] cached candles in range: ${result.cachedCandles}`);
         }
 
         const simulationExchange = container.get<SimulationExchange>(TYPES.SimulationExchange);
         const botRunner = container.get<BotRunner>(TYPES.BotRunner);
-        const portfolioManager = container.get<import("./domain/execution/PortfolioManager").PortfolioManager>(TYPES.PortfolioManager);
+        const portfolioManager = container.get<PortfolioManager>(TYPES.PortfolioManager);
         const runResult = await botRunner.runReplay(
             simulationExchange.streamHistoricalKlines({
                 symbols,
@@ -59,14 +49,23 @@ async function main(): Promise<void> {
             })
         );
         const snapshot = portfolioManager.getSnapshot(endTime);
+        const higherTimeframe = process.env.HTF_TIMEFRAME;
 
-        console.log(`[backtest] symbols replayed: ${symbols.join(", ")}`);
-        console.log(`[backtest] total cached candles: ${totalCachedCandles}`);
-        console.log(`[backtest] total downloaded candles: ${totalDownloadedCandles}`);
-        console.log(`[backtest] pipeline candles processed: ${runResult.processedCandles}`);
-        console.log(`[backtest] pipeline orders executed: ${runResult.executedOrders}`);
-        console.log(`[backtest] ending balance: ${snapshot.balance}`);
-        console.log(`[backtest] ending equity: ${snapshot.equity}`);
+        console.log("");
+        console.log(renderBacktestReport({
+            startTime,
+            endTime,
+            symbols,
+            mainTimeframe: interval,
+            higherTimeframe,
+            initialBalance: config.risk.accountBalance,
+            finalBalance: snapshot.balance,
+            finalEquity: snapshot.equity,
+            totalFees: portfolioManager.getTotalFeesPaid(),
+            maxDrawdown: portfolioManager.getMaxDrawdown(),
+            closedTrades: portfolioManager.getClosedTrades(),
+            runResult
+        }));
     } finally {
         dbConnection.close();
     }
