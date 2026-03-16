@@ -33,6 +33,10 @@ export interface Position {
 export interface PortfolioSnapshot {
     balance: number;
     equity: number;
+    /** Sum of margin locked by open positions (notional / leverage) */
+    usedMargin: number;
+    /** equity - usedMargin; available for new positions */
+    availableBalance: number;
     realizedPnl: number;
     unrealizedPnl: number;
     dailyPnl: number;

@@ -105,10 +105,11 @@ test("BotRunner executes strategy -> risk -> planner -> execution -> portfolio c
     assert.equal(result.approvedEntries, 1);
     assert.equal(result.executedOrders, 2);
     assert.equal(result.rejectedSignals, 0);
+    assert.equal(result.protectiveExits, 1);
     assert.equal(snapshot.openTradeCount, 0);
-    assert.equal(snapshot.balance, 1050);
-    assert.equal(snapshot.realizedPnl, 50);
-    assert.equal(snapshot.equity, 1050);
+    assert.equal(snapshot.balance, 1020);
+    assert.equal(snapshot.realizedPnl, 20);
+    assert.equal(snapshot.equity, 1020);
     assert.equal(notifier.warnMessages.length, 0);
     assert.equal(notifier.infoMessages.length, 2);
 });

@@ -9,12 +9,17 @@ export class RiskManager {
             return this.reject("Only entry signals can be assessed for position risk.");
         }
 
-        if (!signal.side) {
-            return this.reject("Signal side is required for entry risk checks.");
+        if (signal.side !== "long" && signal.side !== "short") {
+            return this.reject("Signal side must be 'long' or 'short'.");
         }
 
-        if (!signal.entryPrice || signal.entryPrice <= 0) {
-            return this.reject("Signal entry price must be a positive number.");
+        if (
+            signal.entryPrice === undefined ||
+            signal.entryPrice === null ||
+            !Number.isFinite(signal.entryPrice) ||
+            signal.entryPrice <= 0
+        ) {
+            return this.reject("Signal entry price must be a positive finite number.");
         }
 
         if (portfolio.openTradeCount >= this.riskParameters.maxOpenTrades) {
@@ -25,18 +30,36 @@ export class RiskManager {
             return this.reject("Maximum drawdown limit reached.");
         }
 
-        if (portfolio.dailyPnl <= -portfolio.equity * this.riskParameters.maxDailyLoss) {
+        const maxDailyLossAmount = portfolio.equity * this.riskParameters.maxDailyLoss;
+        if (portfolio.dailyPnl <= -maxDailyLossAmount - 1e-10) {
             return this.reject("Maximum daily loss limit reached.");
         }
 
-        const capitalToAllocate = portfolio.equity * this.riskParameters.capitalAllocation * this.riskParameters.leverage;
-        const riskAmount = portfolio.equity * this.riskParameters.riskPerTrade;
-        const quantity = capitalToAllocate / signal.entryPrice;
+        const availableBalance = portfolio.availableBalance;
+        if (!Number.isFinite(availableBalance) || availableBalance <= 0) {
+            return this.reject("No available capital for a new position.");
+        }
+
+        const leverage = Math.max(this.riskParameters.leverage, 1);
+        const capitalAllocation = this.riskParameters.capitalAllocation;
+        if (!Number.isFinite(capitalAllocation) || capitalAllocation <= 0) {
+            return this.reject("Capital allocation must be positive.");
+        }
+
+        const riskPerTrade = this.riskParameters.riskPerTrade;
+        if (!Number.isFinite(riskPerTrade) || riskPerTrade <= 0) {
+            return this.reject("Risk per trade must be positive.");
+        }
+
+        const maxMarginToAllocate = availableBalance * capitalAllocation;
+        const maxNotional = maxMarginToAllocate * leverage;
+        const quantity = maxNotional / signal.entryPrice;
 
         if (!Number.isFinite(quantity) || quantity <= 0) {
             return this.reject("Calculated quantity must be positive.");
         }
 
+        const riskAmount = portfolio.equity * riskPerTrade;
         let stopDistance = riskAmount / quantity;
 
         if (!Number.isFinite(stopDistance) || stopDistance <= 0) {
@@ -44,40 +67,61 @@ export class RiskManager {
         }
 
         if (signal.stopLossPrice !== undefined) {
-            const providedStopDistance = this.getStopDistance(signal.side, signal.entryPrice, signal.stopLossPrice);
+            const stopDistanceFromSignal = this.getStopDistance(
+                signal.side,
+                signal.entryPrice,
+                signal.stopLossPrice
+            );
 
-            if (!Number.isFinite(providedStopDistance) || providedStopDistance <= 0) {
+            if (!Number.isFinite(stopDistanceFromSignal) || stopDistanceFromSignal <= 0) {
                 return this.reject("Signal stop loss is invalid for the provided side.");
             }
 
-            const estimatedLossAtStop = providedStopDistance * quantity;
-
-            if (estimatedLossAtStop > riskAmount + 1e-8) {
+            const lossAtStop = stopDistanceFromSignal * quantity;
+            if (lossAtStop > riskAmount + 1e-8) {
                 return this.reject("Signal stop loss exceeds configured risk per trade.");
             }
 
-            stopDistance = providedStopDistance;
+            stopDistance = stopDistanceFromSignal;
         }
 
-        const suggestedStopLossPrice = signal.stopLossPrice ?? this.buildStopLossPrice(signal.side, signal.entryPrice, stopDistance);
+        const suggestedStopLossPrice =
+            signal.stopLossPrice ?? this.buildStopLossPrice(signal.side, signal.entryPrice, stopDistance);
         const estimatedLossAtStop = stopDistance * quantity;
 
-        if (signal.takeProfitPrice !== undefined) {
-            const reward = this.getRewardDistance(signal.side, signal.entryPrice, signal.takeProfitPrice);
-            const rr = reward / stopDistance;
+        if (!Number.isFinite(suggestedStopLossPrice) || suggestedStopLossPrice <= 0) {
+            return this.reject("Calculated stop loss price is invalid.");
+        }
 
-            if (!Number.isFinite(rr) || rr < this.riskParameters.minRR) {
+        if (signal.takeProfitPrice !== undefined) {
+            const rewardDistance = this.getRewardDistance(
+                signal.side,
+                signal.entryPrice,
+                signal.takeProfitPrice
+            );
+
+            if (!Number.isFinite(rewardDistance) || rewardDistance <= 0) {
+                return this.reject("Signal take profit is invalid for the provided side.");
+            }
+
+            const rr = rewardDistance / stopDistance;
+            if (rr < this.riskParameters.minRR - 1e-10) {
                 return this.reject("Signal take profit does not meet minimum risk-reward ratio.");
             }
+        }
+
+        const requiredMargin = (quantity * signal.entryPrice) / leverage;
+        if (requiredMargin > availableBalance + 1e-8) {
+            return this.reject("Insufficient available balance for required margin.");
         }
 
         return {
             approved: true,
             riskAmount,
-            capitalToAllocate,
+            capitalToAllocate: requiredMargin,
             quantity,
             entryPrice: signal.entryPrice,
-            leverage: this.riskParameters.leverage,
+            leverage,
             stopDistance,
             suggestedStopLossPrice,
             estimatedLossAtStop
@@ -110,7 +154,7 @@ export class RiskManager {
             capitalToAllocate: 0,
             quantity: 0,
             entryPrice: 0,
-            leverage: this.riskParameters.leverage,
+            leverage: Math.max(this.riskParameters.leverage, 1),
             stopDistance: 0,
             estimatedLossAtStop: 0
         };

@@ -5,10 +5,15 @@ interface RealizedChangeEvent {
     amount: number;
 }
 
+interface InternalPosition extends Position {
+    reservedMargin: number;
+}
+
 export class PortfolioManager {
+    /** Free cash: не зарезервировано под margin. */
     private balance: number;
     private realizedPnl = 0;
-    private readonly positions = new Map<string, Position>();
+    private readonly positions = new Map<string, InternalPosition>();
     private readonly realizedChanges: RealizedChangeEvent[] = [];
     private peakEquity: number;
 
@@ -32,7 +37,8 @@ export class PortfolioManager {
             return undefined;
         }
 
-        return { ...position };
+        const { reservedMargin: _, ...publicPosition } = position;
+        return { ...publicPosition };
     }
 
     public updateMarketPrice(symbol: string, price: number, timestamp = Date.now()): void {
@@ -47,6 +53,8 @@ export class PortfolioManager {
     }
 
     public applyExecution(order: ExecutedOrder): void {
+        this.validateOrder(order);
+
         const fees = order.fees ?? 0;
 
         if (order.action === "open") {
@@ -58,15 +66,22 @@ export class PortfolioManager {
     }
 
     public getSnapshot(now = Date.now()): PortfolioSnapshot {
-        const positions = Array.from(this.positions.values()).map((position) => ({ ...position }));
+        const positions = Array.from(this.positions.values()).map((p) => {
+            const { reservedMargin: _, ...pub } = p;
+            return { ...pub };
+        });
         const unrealizedPnl = positions.reduce((sum, position) => sum + this.calculateUnrealizedPnl(position), 0);
-        const equity = this.balance + unrealizedPnl;
+        const usedMargin = Array.from(this.positions.values()).reduce((sum, p) => sum + p.reservedMargin, 0);
+        const equity = this.balance + usedMargin + unrealizedPnl;
+        const availableBalance = this.balance;
 
         this.peakEquity = Math.max(this.peakEquity, equity);
 
         return {
             balance: this.balance,
             equity,
+            usedMargin,
+            availableBalance,
             realizedPnl: this.realizedPnl,
             unrealizedPnl,
             dailyPnl: this.getDailyPnl(now),
@@ -76,12 +91,37 @@ export class PortfolioManager {
         };
     }
 
-    private openPosition(order: ExecutedOrder, fees: number): void {
-        if (this.positions.has(order.symbol)) {
-            throw new Error(`Position for ${order.symbol} is already open.`);
+    private validateOrder(order: ExecutedOrder): void {
+        if (!Number.isFinite(order.price) || order.price <= 0) {
+            throw new Error(`Invalid order price: ${order.price}`);
         }
 
-        this.balance -= fees;
+        if (!Number.isFinite(order.quantity) || order.quantity <= 0) {
+            throw new Error(`Invalid order quantity: ${order.quantity}`);
+        }
+
+        if (order.action === "open") {
+            if (this.positions.has(order.symbol)) {
+                throw new Error(`Position for ${order.symbol} is already open.`);
+            }
+        } else {
+            if (!this.positions.has(order.symbol)) {
+                throw new Error(`Position for ${order.symbol} is not open.`);
+            }
+        }
+    }
+
+    private openPosition(order: ExecutedOrder, fees: number): void {
+        const leverage = Math.max(order.leverage, 1);
+        const requiredMargin = (order.quantity * order.price) / leverage;
+
+        if (this.balance < requiredMargin + fees) {
+            throw new Error(
+                `Insufficient balance: required margin ${requiredMargin} + fees ${fees}, available ${this.balance}`
+            );
+        }
+
+        this.balance -= requiredMargin + fees;
         this.realizedPnl -= fees;
         this.realizedChanges.push({ timestamp: order.timestamp, amount: -fees });
 
@@ -96,23 +136,27 @@ export class PortfolioManager {
             takeProfitPrice: order.takeProfitPrice,
             openedAt: order.timestamp,
             updatedAt: order.timestamp,
-            feesPaid: fees
+            feesPaid: fees,
+            reservedMargin: requiredMargin
         });
     }
 
     private closePosition(order: ExecutedOrder, fees: number): void {
-        const position = this.positions.get(order.symbol);
+        const position = this.positions.get(order.symbol)!;
 
-        if (!position) {
-            throw new Error(`Position for ${order.symbol} is not open.`);
+        if (order.quantity !== position.quantity) {
+            throw new Error(
+                `Close quantity mismatch: order ${order.quantity}, position ${position.quantity}`
+            );
         }
 
-        const grossPnl = position.side === "long"
-            ? (order.price - position.entryPrice) * position.quantity
-            : (position.entryPrice - order.price) * position.quantity;
+        const grossPnl =
+            position.side === "long"
+                ? (order.price - position.entryPrice) * position.quantity
+                : (position.entryPrice - order.price) * position.quantity;
         const realizedChange = grossPnl - fees;
 
-        this.balance += realizedChange;
+        this.balance += position.reservedMargin + realizedChange;
         this.realizedPnl += realizedChange;
         this.realizedChanges.push({ timestamp: order.timestamp, amount: realizedChange });
         this.positions.delete(order.symbol);

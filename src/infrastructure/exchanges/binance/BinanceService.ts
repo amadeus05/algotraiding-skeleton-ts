@@ -257,73 +257,56 @@ export class BinanceService {
     }
 
     /**
-     * Параллельная загрузка назад по времени (к endTime)
+     * Последовательная загрузка назад по времени (к endTime).
+     * Каждый следующий чанк зависит от earliest openTime предыдущего — параллелизация невозможна.
      */
     private async fetchParallelBackward(params: NormalizedHistoricalKlineRequest): Promise<BinanceRawKline[]> {
-        // Сначала загружаем первый чанк чтобы определить диапазон
-        const firstChunk = await this.fetchChunk(params, {
-            startTime: undefined,
-            endTime: params.endTime,
-            limit: this.chunkSize,
-            chunkIndex: 0
-        });
+        const allKlines: BinanceRawKline[] = [];
+        let currentEndTime: number | undefined = params.endTime;
+        let remainingLimit = params.limit ?? this.chunkSize;
 
-        if (firstChunk.length === 0 || !params.limit) {
-            return firstChunk;
-        }
-
-        const remaining = params.limit - firstChunk.length;
-        if (remaining <= 0) {
-            return firstChunk.slice(0, params.limit);
-        }
-
-        // Создаем чанки для оставшихся данных
-        const earliestTime = firstChunk[0][0];
-        const chunks: ChunkRequest[] = [];
-
-        let currentEndTime = earliestTime - 1;
-        let remainingLimit = remaining;
-        let chunkIndex = 1;
-
-        while (remainingLimit > 0 && currentEndTime > 0) {
+        while (remainingLimit > 0) {
             const chunkLimit = Math.min(remainingLimit, this.chunkSize);
-            chunks.push({
-                startTime: undefined,
-                endTime: currentEndTime,
-                limit: chunkLimit,
-                chunkIndex: chunkIndex++
-            });
-
-            remainingLimit -= chunkLimit;
-            currentEndTime = 0; // Будет обновлено после загрузки
-        }
-
-        // Загружаем оставшиеся чанки параллельно
-        const remainingKlines: BinanceRawKline[][] = [firstChunk];
-
-        for (let i = 0; i < chunks.length; i += this.maxConcurrentRequests) {
-            const batch = chunks.slice(i, i + this.maxConcurrentRequests);
 
             await this.applyDynamicDelay();
 
-            const batchResults = await Promise.all(
-                batch.map(chunk =>
-                    this.fetchChunk(params, chunk).catch(error => {
-                        if (this.isRateLimitError(error)) {
-                            return this.retryWithBackoff(params, chunk, 0);
-                        }
-                        throw error;
-                    })
-                )
-            );
+            const chunk = await this.fetchChunk(params, {
+                startTime: undefined,
+                endTime: currentEndTime,
+                limit: chunkLimit,
+                chunkIndex: allKlines.length
+            }).catch((error) => {
+                if (this.isRateLimitError(error)) {
+                    return this.retryWithBackoff(params, {
+                        startTime: undefined,
+                        endTime: currentEndTime,
+                        limit: chunkLimit,
+                        chunkIndex: allKlines.length
+                    }, 0);
+                }
+                throw error;
+            });
 
-            remainingKlines.push(...batchResults);
+            if (chunk.length === 0) {
+                break;
+            }
+
+            allKlines.push(...chunk);
+            remainingLimit -= chunk.length;
+
+            if (chunk.length < chunkLimit) {
+                break;
+            }
+
+            const earliestTime = chunk[0][0];
+            currentEndTime = earliestTime - 1;
+
+            if (currentEndTime <= 0) {
+                break;
+            }
         }
 
-        // Объединяем и сортируем
-        const allKlines = remainingKlines.flat();
         const sorted = this.sortAndDeduplicate(allKlines);
-
         return params.limit ? sorted.slice(0, params.limit) : sorted;
     }
 

@@ -97,7 +97,7 @@ test("ExecutionPlanner builds stop and take profit from risk decision", () => {
 });
 
 test("PortfolioManager tracks realized and unrealized pnl with fees", () => {
-    const portfolio = new PortfolioManager(1000);
+    const portfolio = new PortfolioManager(1001);
     const openedAt = Date.UTC(2024, 0, 1, 10, 0, 0);
     const closedAt = Date.UTC(2024, 0, 1, 12, 0, 0);
 
@@ -114,15 +114,15 @@ test("PortfolioManager tracks realized and unrealized pnl with fees", () => {
     });
 
     const afterOpen = portfolio.getSnapshot(openedAt);
-    assert.equal(afterOpen.balance, 999);
+    assert.equal(afterOpen.balance, 0);
     assert.equal(afterOpen.realizedPnl, -1);
-    assert.equal(afterOpen.equity, 999);
+    assert.equal(afterOpen.equity, 1000);
     assert.equal(afterOpen.openTradeCount, 1);
 
     portfolio.updateMarketPrice("BTCUSDT", 110, Date.UTC(2024, 0, 1, 11, 0, 0));
     const afterMark = portfolio.getSnapshot(Date.UTC(2024, 0, 1, 11, 0, 0));
     assert.equal(afterMark.unrealizedPnl, 100);
-    assert.equal(afterMark.equity, 1099);
+    assert.equal(afterMark.equity, 1100);
 
     portfolio.applyExecution({
         action: "close",
@@ -136,7 +136,7 @@ test("PortfolioManager tracks realized and unrealized pnl with fees", () => {
     });
 
     const afterClose = portfolio.getSnapshot(closedAt);
-    assert.equal(afterClose.balance, 1048);
+    assert.equal(afterClose.balance, 1049);
     assert.equal(afterClose.realizedPnl, 48);
     assert.equal(afterClose.unrealizedPnl, 0);
     assert.equal(afterClose.dailyPnl, 48);

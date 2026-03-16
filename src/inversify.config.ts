@@ -94,7 +94,8 @@ export function createContainer(): Container {
             container.get<ExecutionPlanner>(TYPES.ExecutionPlanner),
             container.get<SimulatedExecutionEngine>(TYPES.ExecutionEngine),
             container.get<PortfolioManager>(TYPES.PortfolioManager),
-            container.get<ConsoleNotifier>(TYPES.Notifier)
+            container.get<ConsoleNotifier>(TYPES.Notifier),
+            { maxHistoryLength: 500 }
         )
     ).inTransientScope();
 

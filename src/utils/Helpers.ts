@@ -4,11 +4,12 @@ const FIXED_INTERVAL_MULTIPLIERS: Record<string, number> = {
     m: 60 * 1000,
     h: 60 * 60 * 1000,
     d: 24 * 60 * 60 * 1000,
-    w: 7 * 24 * 60 * 60 * 1000
+    w: 7 * 24 * 60 * 60 * 1000,
+    M: 30 * 24 * 60 * 60 * 1000
 };
 
 export function intervalToMilliseconds(interval: string): number {
-    const match = interval.trim().match(/^(\d+)([mhdw])$/);
+    const match = interval.trim().match(/^(\d+)([mhdwM])$/);
 
     if (!match) {
         throw new Error(`Unsupported interval for local cache coverage checks: ${interval}`);
