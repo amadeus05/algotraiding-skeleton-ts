@@ -8,7 +8,6 @@ import { TYPES } from "./core/types/di.types";
 import { ExecutionPlanner } from "./domain/execution/ExecutionPlanner";
 import { PortfolioManager } from "./domain/execution/PortfolioManager";
 import { RiskManager } from "./domain/risk/RiskManager";
-import { NoopStrategy } from "./domain/strategy/NoopStrategy";
 import { BinanceAdapter } from "./infrastructure/exchanges/binance/BinanceAdapter";
 import { BinanceService } from "./infrastructure/exchanges/binance/BinanceService";
 import { SimulationExchange } from "./infrastructure/exchanges/simulation/SimulationExchange";
@@ -58,9 +57,9 @@ export function createContainer(): Container {
         new SimulationExchange(container.get<SQLiteKlineRepository>(TYPES.MarketDataRepository))
     ).inSingletonScope();
 
-    container.bind<StrategyContract>(TYPES.Strategy).toDynamicValue(() =>
-        new NoopStrategy()
-    ).inSingletonScope();
+    container.bind<StrategyContract>(TYPES.Strategy).toDynamicValue(() => ({
+        evaluate: (ctx) => ({ symbol: ctx.symbol, action: "hold" as const, timestamp: ctx.candle.timestamp })
+    })).inSingletonScope();
 
     container.bind<RiskManager>(TYPES.RiskManager).toDynamicValue(() => {
         const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
