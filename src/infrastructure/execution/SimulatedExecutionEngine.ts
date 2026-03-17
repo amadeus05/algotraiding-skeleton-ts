@@ -31,9 +31,38 @@ export class SimulatedExecutionEngine implements ExecutionEngineContract {
 
     /**
      * Build a close order for an existing position at the candle's close price.
+     * Used for immediate/live exits.
      */
     public buildCloseOrder(position: Position, candle: Candle): ExecutedOrder {
-        const price = candle.close;
+        return this.buildCloseExecutedOrder(position, candle.close, candle.timestamp);
+    }
+
+    /**
+     * Build a close order for an existing position at the candle's open price.
+     * Used for backtest exits at next candle's open to avoid optimistic exit bias.
+     */
+    public buildCloseOrderAtOpen(position: Position, candle: Candle): ExecutedOrder {
+        return this.buildCloseExecutedOrder(position, candle.open, candle.timestamp);
+    }
+
+    private buildExecutedOrder(plan: ExecutionPlan, price: number, timestamp: number): ExecutedOrder {
+        const notional = price * plan.quantity;
+
+        return {
+            action: plan.action,
+            symbol: plan.symbol,
+            side: plan.side,
+            quantity: plan.quantity,
+            price,
+            leverage: plan.leverage,
+            timestamp,
+            fees: notional * this.feeRate,
+            stopLossPrice: plan.stopLossPrice,
+            takeProfitPrice: plan.takeProfitPrice
+        };
+    }
+
+    private buildCloseExecutedOrder(position: Position, price: number, timestamp: number): ExecutedOrder {
         const notional = price * position.quantity;
 
         return {
@@ -43,27 +72,10 @@ export class SimulatedExecutionEngine implements ExecutionEngineContract {
             quantity: position.quantity,
             price,
             leverage: position.leverage,
-            timestamp: candle.timestamp,
+            timestamp,
             fees: notional * this.feeRate,
             stopLossPrice: position.stopLossPrice,
             takeProfitPrice: position.takeProfitPrice
-        };
-    }
-
-    private buildExecutedOrder(plan: ExecutionPlan, executionPrice: number, timestamp: number): ExecutedOrder {
-        const notional = executionPrice * plan.quantity;
-
-        return {
-            action: plan.action,
-            symbol: plan.symbol,
-            side: plan.side,
-            quantity: plan.quantity,
-            price: executionPrice,
-            leverage: plan.leverage,
-            timestamp,
-            fees: notional * this.feeRate,
-            stopLossPrice: plan.stopLossPrice,
-            takeProfitPrice: plan.takeProfitPrice
         };
     }
 }

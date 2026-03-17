@@ -15,7 +15,14 @@ export interface ExecutionEngineContract {
     executeAtOpen(plan: ExecutionPlan, candle: Candle): ExecutedOrder;
 
     /**
-     * Build a close order for an existing position.
+     * Build a close order for an existing position at the candle's close price.
+     * Used for immediate/live exits.
      */
     buildCloseOrder(position: Position, candle: Candle): ExecutedOrder;
+
+    /**
+     * Build a close order for an existing position at the candle's open price.
+     * Used for backtest exits at next candle's open to avoid optimistic exit bias.
+     */
+    buildCloseOrderAtOpen(position: Position, candle: Candle): ExecutedOrder;
 }

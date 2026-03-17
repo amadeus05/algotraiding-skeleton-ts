@@ -3,9 +3,9 @@ import { ExecutionEngineContract } from "../core/interfaces/ExecutionEngineContr
 import { FullStrategyContext, StrategyContract } from "../core/interfaces/StrategyContract";
 import { NotifierContract } from "../core/interfaces/NotifierContract";
 import { Candle, KlineInterval } from "../core/types/common";
-import { ClosedKlineEvent, StrategySignal, PortfolioSnapshot } from "../core/types/trading";
+import { ClosedKlineEvent, PortfolioSnapshot, Position, StrategySignal } from "../core/types/trading";
 import { ExecutionPlanner } from "../domain/execution/ExecutionPlanner";
-import { ExecutableOrder, PendingOrdersQueue } from "../domain/execution/PendingOrdersQueue";
+import { PendingOrdersQueue } from "../domain/execution/PendingOrdersQueue";
 import { PortfolioManager } from "../domain/execution/PortfolioManager";
 import { RiskManager } from "../domain/risk/RiskManager";
 import { SignalBatchProcessor, SignalEvaluation } from "../domain/execution/SignalBatchProcessor";
@@ -32,19 +32,39 @@ export interface BotRunnerOptions {
     interval: KlineInterval;
 }
 
+type PendingBatchEvent = {
+    event: ClosedKlineEvent;
+    candle: Candle;
+    history: Candle[];
+    symbol: string;
+};
+
+type PendingExitOrder = {
+    id: string;
+    symbol: string;
+    position: Position;
+    createdAt: number;
+    targetCandleOpenTime: number;
+};
+
 export class BotRunner {
     private readonly pendingOrdersQueue: PendingOrdersQueue;
     private readonly batchProcessor: SignalBatchProcessor;
 
     // Batch buffering state for multi-symbol backtest (eliminates ordering bias)
     private currentBatchTimestamp: number | null = null;
-    private pendingBatchEvents: Array<{ event: ClosedKlineEvent; candle: Candle; history: Candle[]; symbol: string }> = [];
+    private pendingBatchEvents: PendingBatchEvent[] = [];
+
+    // Pending exit orders for symmetric next-open exit execution in backtests
+    private readonly pendingExitOrders = new Map<string, PendingExitOrder>();
+    private pendingExitIdCounter = 0;
 
     // DataProvider гарантирует отсутствие look-ahead bias
     private dataProvider: DataProviderContract | null = null;
 
     // Execution metadata для стратегии
     private isBacktestMode: boolean;
+    private readonly intervalMs: number;
 
     constructor(
         private readonly strategy: StrategyContract,
@@ -55,8 +75,8 @@ export class BotRunner {
         private readonly notifier: NotifierContract,
         options: BotRunnerOptions & { isBacktest?: boolean }
     ) {
-        const intervalMs = intervalToMilliseconds(options.interval);
-        this.pendingOrdersQueue = new PendingOrdersQueue({ intervalMs });
+        this.intervalMs = intervalToMilliseconds(options.interval);
+        this.pendingOrdersQueue = new PendingOrdersQueue({ intervalMs: this.intervalMs });
         this.batchProcessor = new SignalBatchProcessor(riskManager, executionPlanner);
         this.isBacktestMode = options.isBacktest ?? true;
     }
@@ -135,6 +155,7 @@ export class BotRunner {
     private resetBatchState(): void {
         this.currentBatchTimestamp = null;
         this.pendingBatchEvents = [];
+        this.pendingExitOrders.clear();
     }
 
     private createEmptyResult(): BotRunResult {
@@ -205,9 +226,15 @@ export class BotRunner {
 
         const timestamp = this.currentBatchTimestamp!;
 
-        // STEP 1: Execute pending orders at this candle's open
-        const firstCandle = this.pendingBatchEvents[0].candle;
-        this.executePendingOrders(firstCandle, result);
+        // Карта свечей батча по символам.
+        const candlesBySymbol = new Map<string, Candle>();
+        for (const { symbol, candle } of this.pendingBatchEvents) {
+            candlesBySymbol.set(symbol, candle);
+        }
+
+        // STEP 1: Execute pending entry and exit orders at each symbol's candle open
+        this.executePendingOrders(candlesBySymbol, timestamp, result);
+        this.executePendingExitOrders(candlesBySymbol, timestamp, result);
 
         // STEP 2: Update market prices for ALL symbols in batch
         for (const { event, candle } of this.pendingBatchEvents) {
@@ -218,7 +245,7 @@ export class BotRunner {
         // STEP 3: Get SINGLE portfolio snapshot for ALL signals in this batch
         const portfolioSnapshot = this.portfolioManager.getSnapshot(timestamp);
 
-        // STEP 4: Collect all entry signals from batch
+        // STEP 4: Collect all entry and exit signals from batch
         const signalEvaluations: SignalEvaluation[] = [];
         const exitSignals: Array<{ event: ClosedKlineEvent; candle: Candle }> = [];
 
@@ -277,14 +304,13 @@ export class BotRunner {
             if (signal.action === "exit") {
                 exitSignals.push({ event, candle });
             } else if (signal.action === "enter") {
-                // Для SignalEvaluation используем ту же историю
                 signalEvaluations.push({ event, candle, history: strategyContext.history, signal });
             } else {
                 result.skippedSignals += 1;
             }
         }
 
-        // STEP 5: Process exit signals immediately (they don't compete for slots)
+        // STEP 5: Process exit signals
         for (const { event, candle } of exitSignals) {
             const position = this.portfolioManager.getPosition(event.symbol);
             this.handleExitSignal(event.symbol, position, candle, result);
@@ -299,7 +325,6 @@ export class BotRunner {
         this.pendingBatchEvents = [];
     }
 
-
     /**
      * Processes entry signals in batch, ensuring fair allocation of portfolio limits.
      * All signals are evaluated against the same portfolio snapshot.
@@ -309,16 +334,12 @@ export class BotRunner {
         portfolioSnapshot: PortfolioSnapshot,
         result: BotRunResult
     ): void {
-        // Import type locally to avoid circular dependency issues
-        type ExecutionPlan = import("../core/types/trading").ExecutionPlan;
-        // Use batch processor to evaluate all signals against same snapshot
         const batchResult = this.batchProcessor.processBatch(
             evaluations,
             portfolioSnapshot,
             this.riskManager.maxOpenTrades
         );
 
-        // Handle approved signals
         for (const approved of batchResult.approvedEvaluations) {
             const { event, signal } = approved.evaluation;
             const position = this.portfolioManager.getPosition(event.symbol);
@@ -326,7 +347,6 @@ export class BotRunner {
             result.entrySignals += 1;
 
             if (position) {
-                // Should not happen due to portfolio limits, but safety check
                 result.skippedSignals += 1;
                 this.notifier.info(`[bot] ${event.symbol} entry signal ignored: position already open`);
                 continue;
@@ -336,9 +356,8 @@ export class BotRunner {
             this.executeEntrySignal(event, signal, approved.executionPlan!, approved.evaluation.candle, result);
         }
 
-        // Handle rejected signals
         for (const rejected of batchResult.rejectedEvaluations) {
-            const { event, signal } = rejected.evaluation;
+            const { event } = rejected.evaluation;
             result.entrySignals += 1;
             result.rejectedSignals += 1;
             this.notifier.warn(`[bot] ${event.symbol} signal rejected: ${rejected.riskDecision.reason}`);
@@ -352,11 +371,12 @@ export class BotRunner {
         candle: Candle,
         result: BotRunResult
     ): void {
-        // For "next_open" execution timing (backtest default), queue for next candle
+        void signal;
+
         if (executionPlan.executionTiming === "next_open") {
             const pendingOrder = this.pendingOrdersQueue.queueForNextOpen(
                 executionPlan,
-                candle.timestamp // Current candle close time = next candle open time target
+                candle.timestamp
             );
             result.pendingOrdersCreated += 1;
             this.notifier.info(
@@ -367,23 +387,35 @@ export class BotRunner {
             return;
         }
 
-        // For "immediate" execution timing (live trading), execute right away
         const order = this.executionEngine.execute(executionPlan, candle);
         this.portfolioManager.applyExecution(order);
 
         result.executedOrders += 1;
         this.notifier.info(
             `[bot] ${event.symbol} ${executionPlan.side} entry executed ` +
-            `qty=${executionPlan.quantity} price=${executionPlan.entryPrice} (immediate execution)`
+            `qty=${executionPlan.quantity} price=${order.price} (immediate execution)`
         );
     }
 
-    private executePendingOrders(candle: Candle, result: BotRunResult): void {
-        const executableOrders = this.pendingOrdersQueue.getExecutableOrders(candle.timestamp);
+    private executePendingOrders(
+        candlesBySymbol: Map<string, Candle>,
+        timestamp: number,
+        result: BotRunResult
+    ): void {
+        const executableOrders = this.pendingOrdersQueue.getExecutableOrders(timestamp);
 
         for (const executable of executableOrders) {
-            // Execute at the open price of this candle (next candle from when order was queued)
-            const order = this.executionEngine.executeAtOpen(executable.plan, candle);
+            const executionCandle = candlesBySymbol.get(executable.plan.symbol);
+
+            if (!executionCandle) {
+                this.notifier.warn(
+                    `[bot] ${executable.plan.symbol} pending entry could not be executed: ` +
+                    `no candle found for timestamp=${new Date(timestamp).toISOString()}`
+                );
+                continue;
+            }
+
+            const order = this.executionEngine.executeAtOpen(executable.plan, executionCandle);
             this.portfolioManager.applyExecution(order);
             this.pendingOrdersQueue.remove(executable.pendingOrderId);
 
@@ -395,9 +427,48 @@ export class BotRunner {
         }
     }
 
+    private executePendingExitOrders(
+        candlesBySymbol: Map<string, Candle>,
+        timestamp: number,
+        result: BotRunResult
+    ): void {
+        const executableExits = Array.from(this.pendingExitOrders.values())
+            .filter((order) => order.targetCandleOpenTime === timestamp);
+
+        for (const pendingExit of executableExits) {
+            const executionCandle = candlesBySymbol.get(pendingExit.symbol);
+
+            if (!executionCandle) {
+                this.notifier.warn(
+                    `[bot] ${pendingExit.symbol} pending exit could not be executed: ` +
+                    `no candle found for timestamp=${new Date(timestamp).toISOString()}`
+                );
+                continue;
+            }
+
+            const currentPosition = this.portfolioManager.getPosition(pendingExit.symbol);
+
+            if (!currentPosition) {
+                this.pendingExitOrders.delete(pendingExit.id);
+                this.notifier.info(`[bot] ${pendingExit.symbol} pending exit skipped: position already closed`);
+                continue;
+            }
+
+            const closeOrder = this.executionEngine.buildCloseOrderAtOpen(currentPosition, executionCandle);
+            this.portfolioManager.applyExecution(closeOrder);
+            this.pendingExitOrders.delete(pendingExit.id);
+
+            result.executedOrders += 1;
+            this.notifier.info(
+                `[bot] ${pendingExit.symbol} exit executed at ${closeOrder.price} ` +
+                `(next-open execution, symmetric with entries)`
+            );
+        }
+    }
+
     private handleExitSignal(
         symbol: string,
-        position: import("../core/types/trading").Position | undefined,
+        position: Position | undefined,
         candle: Candle,
         result: BotRunResult
     ): void {
@@ -407,9 +478,35 @@ export class BotRunner {
             return;
         }
 
+        if (this.isBacktestMode) {
+            // Симметрично входам: exit signal на close -> исполнение на next open
+            const pendingExit: PendingExitOrder = {
+                id: this.generatePendingExitId(),
+                symbol,
+                position,
+                createdAt: candle.timestamp,
+                targetCandleOpenTime: candle.timestamp + this.intervalMs
+            };
+
+            this.pendingExitOrders.set(pendingExit.id, pendingExit);
+            result.pendingOrdersCreated += 1;
+
+            this.notifier.info(
+                `[bot] ${symbol} exit queued for next candle open ` +
+                `(target: ${new Date(pendingExit.targetCandleOpenTime).toISOString()})`
+            );
+            return;
+        }
+
+        // Live/immediate mode keeps same-bar close behavior
         const closeOrder = this.executionEngine.buildCloseOrder(position, candle);
         this.portfolioManager.applyExecution(closeOrder);
         result.executedOrders += 1;
-        this.notifier.info(`[bot] ${symbol} exit executed at ${closeOrder.price}`);
+        this.notifier.info(`[bot] ${symbol} exit executed at ${closeOrder.price} (immediate execution)`);
+    }
+
+    private generatePendingExitId(): string {
+        this.pendingExitIdCounter += 1;
+        return `pending-exit-${this.pendingExitIdCounter}`;
     }
 }
