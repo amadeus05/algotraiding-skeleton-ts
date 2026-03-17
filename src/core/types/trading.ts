@@ -14,6 +14,8 @@ export interface StrategySignal {
     takeProfitPrice?: number;
     timestamp?: number;
     metadata?: Record<string, unknown>;
+    /** Execution timing - "immediate" for live trading, "next_open" for backtest to avoid look-ahead bias */
+    executionTiming?: ExecutionTiming;
 }
 
 export interface Position {
@@ -54,6 +56,8 @@ export interface RiskDecision {
     estimatedLossAtStop: number;
 }
 
+export type ExecutionTiming = "immediate" | "next_open";
+
 export interface ExecutionPlan {
     action: ExecutionAction;
     symbol: string;
@@ -67,6 +71,14 @@ export interface ExecutionPlan {
     takeProfitPrice?: number;
     reduceOnly: boolean;
     estimatedLossAtStop: number;
+    executionTiming: ExecutionTiming;
+}
+
+export interface PendingOrder {
+    id: string;
+    plan: ExecutionPlan;
+    createdAt: number;
+    targetCandleOpenTime: number;
 }
 
 export interface ExecutedOrder {

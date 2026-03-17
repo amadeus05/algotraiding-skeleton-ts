@@ -13,24 +13,25 @@ export class SimulatedExecutionEngine implements ExecutionEngineContract {
         this.feeRate = Math.max(options.feeRate ?? 0, 0);
     }
 
+    /**
+     * Execute immediately at the plan's entry price (typically candle.close).
+     * Used for immediate execution scenarios.
+     */
     public execute(plan: ExecutionPlan, candle: Candle): ExecutedOrder {
-        const price = plan.entryPrice;
-        const notional = price * plan.quantity;
-
-        return {
-            action: plan.action,
-            symbol: plan.symbol,
-            side: plan.side,
-            quantity: plan.quantity,
-            price,
-            leverage: plan.leverage,
-            timestamp: candle.timestamp,
-            fees: notional * this.feeRate,
-            stopLossPrice: plan.stopLossPrice,
-            takeProfitPrice: plan.takeProfitPrice
-        };
+        return this.buildExecutedOrder(plan, plan.entryPrice, candle.timestamp);
     }
 
+    /**
+     * Execute at the candle's open price.
+     * Used for backtest to avoid look-ahead bias by executing at next candle's open.
+     */
+    public executeAtOpen(plan: ExecutionPlan, candle: Candle): ExecutedOrder {
+        return this.buildExecutedOrder(plan, candle.open, candle.timestamp);
+    }
+
+    /**
+     * Build a close order for an existing position at the candle's close price.
+     */
     public buildCloseOrder(position: Position, candle: Candle): ExecutedOrder {
         const price = candle.close;
         const notional = price * position.quantity;
@@ -43,7 +44,26 @@ export class SimulatedExecutionEngine implements ExecutionEngineContract {
             price,
             leverage: position.leverage,
             timestamp: candle.timestamp,
-            fees: notional * this.feeRate
+            fees: notional * this.feeRate,
+            stopLossPrice: position.stopLossPrice,
+            takeProfitPrice: position.takeProfitPrice
+        };
+    }
+
+    private buildExecutedOrder(plan: ExecutionPlan, executionPrice: number, timestamp: number): ExecutedOrder {
+        const notional = executionPrice * plan.quantity;
+
+        return {
+            action: plan.action,
+            symbol: plan.symbol,
+            side: plan.side,
+            quantity: plan.quantity,
+            price: executionPrice,
+            leverage: plan.leverage,
+            timestamp,
+            fees: notional * this.feeRate,
+            stopLossPrice: plan.stopLossPrice,
+            takeProfitPrice: plan.takeProfitPrice
         };
     }
 }

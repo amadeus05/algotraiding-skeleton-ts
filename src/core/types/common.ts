@@ -69,6 +69,8 @@ export interface BacktestConfig {
     startTime: number;
     endTime: number;
     rangeDays: number;
+    /** True when running in backtest mode to enable look-ahead bias protection */
+    isBacktest: boolean;
 }
 
 export interface StrategyConfig {

@@ -1,17 +1,21 @@
-import { ExecutionPlan, RiskDecision, StrategySignal } from "../../core/types/trading";
+import { ExecutionPlan, ExecutionTiming, RiskDecision, StrategySignal } from "../../core/types/trading";
 
 export interface ExecutionPlannerOptions {
     defaultOrderType?: ExecutionPlan["orderType"];
     defaultTakeProfitRatio?: number;
+    /** Default execution timing - "next_open" for backtest to avoid look-ahead bias, "immediate" for live trading */
+    defaultExecutionTiming?: ExecutionTiming;
 }
 
 export class ExecutionPlanner {
     private readonly defaultOrderType: ExecutionPlan["orderType"];
     private readonly defaultTakeProfitRatio?: number;
+    private readonly defaultExecutionTiming: ExecutionTiming;
 
     constructor(options: ExecutionPlannerOptions = {}) {
         this.defaultOrderType = options.defaultOrderType ?? "market";
         this.defaultTakeProfitRatio = options.defaultTakeProfitRatio;
+        this.defaultExecutionTiming = options.defaultExecutionTiming ?? "next_open";
     }
 
     public buildEntryPlan(signal: StrategySignal, riskDecision: RiskDecision): ExecutionPlan {
@@ -30,6 +34,7 @@ export class ExecutionPlanner {
         }
 
         const takeProfitPrice = signal.takeProfitPrice ?? this.buildDefaultTakeProfit(signal, riskDecision);
+        const executionTiming = signal.executionTiming ?? this.defaultExecutionTiming;
 
         return {
             action: "open",
@@ -43,7 +48,8 @@ export class ExecutionPlanner {
             stopLossPrice,
             takeProfitPrice,
             reduceOnly: false,
-            estimatedLossAtStop: riskDecision.estimatedLossAtStop
+            estimatedLossAtStop: riskDecision.estimatedLossAtStop,
+            executionTiming
         };
     }
 

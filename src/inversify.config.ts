@@ -68,8 +68,12 @@ export function createContainer(): Container {
 
     container.bind<ExecutionPlanner>(TYPES.ExecutionPlanner).toDynamicValue(() => {
         const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+        const backtestConfig = configManager.getBacktestConfig();
         return new ExecutionPlanner({
-            defaultTakeProfitRatio: configManager.getStrategyConfig().takeProfitRatio
+            defaultTakeProfitRatio: configManager.getStrategyConfig().takeProfitRatio,
+            // Use "next_open" for backtest to avoid look-ahead bias
+            // For live trading, this would be "immediate"
+            defaultExecutionTiming: backtestConfig.isBacktest ? "next_open" : "immediate"
         });
     }).inSingletonScope();
 
@@ -86,16 +90,19 @@ export function createContainer(): Container {
         new ConsoleNotifier()
     ).inSingletonScope();
 
-    container.bind<BotRunner>(TYPES.BotRunner).toDynamicValue(() =>
-        new BotRunner(
+    container.bind<BotRunner>(TYPES.BotRunner).toDynamicValue(() => {
+        const configManager = container.get<ConfigManager>(TYPES.ConfigManager);
+        const backtestConfig = configManager.getBacktestConfig();
+        return new BotRunner(
             container.get<StrategyContract>(TYPES.Strategy),
             container.get<RiskManager>(TYPES.RiskManager),
             container.get<ExecutionPlanner>(TYPES.ExecutionPlanner),
             container.get<SimulatedExecutionEngine>(TYPES.ExecutionEngine),
             container.get<PortfolioManager>(TYPES.PortfolioManager),
-            container.get<ConsoleNotifier>(TYPES.Notifier)
-        )
-    ).inTransientScope();
+            container.get<ConsoleNotifier>(TYPES.Notifier),
+            { interval: backtestConfig.interval }
+        );
+    }).inTransientScope();
 
     return container;
 }

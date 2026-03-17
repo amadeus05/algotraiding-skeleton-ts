@@ -51,12 +51,12 @@ class EnterExitStrategy implements StrategyContract {
     }
 }
 
-function createCandle(timestamp: number, close: number): Candle {
+function createCandle(timestamp: number, open: number, close: number, high?: number, low?: number): Candle {
     return {
         timestamp,
-        open: close,
-        high: close,
-        low: close,
+        open,
+        high: high ?? Math.max(open, close),
+        low: low ?? Math.min(open, close),
         close,
         volume: 1000
     };
@@ -76,21 +76,26 @@ function createRiskParameters(overrides: Partial<RiskParameters> = {}): RiskPara
     };
 }
 
-test("BotRunner executes strategy -> risk -> planner -> execution -> portfolio chain", () => {
+test("BotRunner executes strategy -> risk -> planner -> execution -> portfolio chain with next-open execution (no look-ahead bias)", () => {
+    // Create candles with distinct open/close to verify next-open execution
+    // Entry signal generated at candle 1 close (100)
+    // Entry executed at candle 2 open (101) - next candle open!
+    // Exit executed at candle 3 close (105)
     const candles = [
-        createCandle(Date.UTC(2024, 0, 1, 0, 0, 0), 100),
-        createCandle(Date.UTC(2024, 0, 1, 1, 0, 0), 101),
-        createCandle(Date.UTC(2024, 0, 1, 2, 0, 0), 105)
+        createCandle(Date.UTC(2024, 0, 1, 0, 0, 0), 100, 100),  // Signal generated at close=100
+        createCandle(Date.UTC(2024, 0, 1, 1, 0, 0), 101, 102),  // Entry at open=101
+        createCandle(Date.UTC(2024, 0, 1, 2, 0, 0), 104, 105)   // Exit at close=105
     ];
     const notifier = new CollectingNotifier();
     const portfolioManager = new PortfolioManager(1000);
     const botRunner = new BotRunner(
         new EnterExitStrategy(),
         new RiskManager(createRiskParameters()),
-        new ExecutionPlanner({ defaultTakeProfitRatio: 2 }),
+        new ExecutionPlanner({ defaultTakeProfitRatio: 2, defaultExecutionTiming: "next_open" }),
         new SimulatedExecutionEngine(),
         portfolioManager,
-        notifier
+        notifier,
+        { interval: "1h" }
     );
 
     const result = botRunner.run({
@@ -100,15 +105,23 @@ test("BotRunner executes strategy -> risk -> planner -> execution -> portfolio c
     });
     const snapshot = portfolioManager.getSnapshot(candles[candles.length - 1].timestamp);
 
+    // Verify execution pipeline
     assert.equal(result.processedCandles, 3);
     assert.equal(result.entrySignals, 1);
     assert.equal(result.approvedEntries, 1);
-    assert.equal(result.executedOrders, 2);
+    assert.equal(result.pendingOrdersCreated, 1);  // Entry queued for next open
+    assert.equal(result.executedOrders, 2);  // 1 entry + 1 exit
     assert.equal(result.rejectedSignals, 0);
     assert.equal(snapshot.openTradeCount, 0);
-    assert.equal(snapshot.balance, 1050);
-    assert.equal(snapshot.realizedPnl, 50);
-    assert.equal(snapshot.equity, 1050);
+
+    // PnL calculation:
+    // Entry at 101 (next open from signal at 100)
+    // Exit at 105
+    // Gross PnL = (105 - 101) * 10 = 40
+    assert.equal(snapshot.balance, 1040);
+    assert.equal(snapshot.realizedPnl, 40);
+    assert.equal(snapshot.equity, 1040);
     assert.equal(notifier.warnMessages.length, 0);
-    assert.equal(notifier.infoMessages.length, 2);
+    // 3 info messages: entry queued, entry executed (next-open), exit executed
+    assert.equal(notifier.infoMessages.length, 3);
 });

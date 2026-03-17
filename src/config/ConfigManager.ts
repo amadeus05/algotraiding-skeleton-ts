@@ -81,13 +81,16 @@ export class ConfigManager {
             throw new Error("BACKTEST_START cannot be greater than BACKTEST_END.");
         }
 
+        const isBacktest = process.env.BACKTEST_MODE === 'true' || process.env.BACKTEST_START !== undefined;
+
         return {
             symbol: process.env.BACKTEST_SYMBOL || symbols[0],
             interval: (process.env.BACKTEST_INTERVAL || defaultTimeframe) as BacktestConfig["interval"],
             useTestnet: process.env.BACKTEST_USE_TESTNET === 'true',
             startTime,
             endTime,
-            rangeDays: defaultRangeDays
+            rangeDays: defaultRangeDays,
+            isBacktest
         };
     }
 
