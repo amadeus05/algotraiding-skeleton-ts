@@ -24,6 +24,10 @@ class CollectingNotifier implements NotifierContract {
 }
 
 class EnterExitStrategy implements StrategyContract {
+    public minHistoryRequired(): number {
+        return 1;
+    }
+
     public evaluate(context: StrategyContext): StrategySignal {
         if (context.history.length === 1) {
             return {
@@ -137,6 +141,10 @@ test("BotRunner batch processing eliminates ordering bias with MAX_OPEN_TRADES=1
     // Create a strategy that returns signals with different quality for different symbols
     // Only generates entry on first candle (when history length is 1)
     class QualityBasedStrategy implements StrategyContract {
+        public minHistoryRequired(): number {
+            return 1;
+        }
+
         public evaluate(context: StrategyContext): StrategySignal {
             // Only enter on first candle for each symbol
             if (context.history.length !== 1) {
@@ -294,6 +302,10 @@ test("BotRunner batch processing evaluates all signals against same portfolio sn
 
     // Strategy that generates entry signals for all symbols on first candle only
     class AlwaysEnterStrategy implements StrategyContract {
+        public minHistoryRequired(): number {
+            return 1;
+        }
+
         public evaluate(context: StrategyContext): StrategySignal {
             // Only enter on first candle for each symbol
             if (context.history.length !== 1) {

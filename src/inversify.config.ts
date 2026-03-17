@@ -12,6 +12,7 @@ import { BinanceAdapter } from "./infrastructure/exchanges/binance/BinanceAdapte
 import { BinanceService } from "./infrastructure/exchanges/binance/BinanceService";
 import { SimulationExchange } from "./infrastructure/exchanges/simulation/SimulationExchange";
 import { SimulatedExecutionEngine } from "./infrastructure/execution/SimulatedExecutionEngine";
+import { DataProvider } from "./infrastructure/data/DataProvider";
 import { ConsoleNotifier } from "./infrastructure/notifiers/ConsoleNotifier";
 import { DatabaseConnection } from "./infrastructure/persistence/DatabaseConnection";
 import { MigrationService } from "./infrastructure/persistence/MigrationService";
@@ -57,8 +58,13 @@ export function createContainer(): Container {
         new SimulationExchange(container.get<SQLiteKlineRepository>(TYPES.MarketDataRepository))
     ).inSingletonScope();
 
+    container.bind<DataProvider>(TYPES.DataProvider).toDynamicValue(() =>
+        new DataProvider(container.get<SQLiteKlineRepository>(TYPES.MarketDataRepository))
+    ).inSingletonScope();
+
     container.bind<StrategyContract>(TYPES.Strategy).toDynamicValue(() => ({
-        evaluate: (ctx) => ({ symbol: ctx.symbol, action: "hold" as const, timestamp: ctx.candle.timestamp })
+        evaluate: (ctx) => ({ symbol: ctx.symbol, action: "hold" as const, timestamp: ctx.candle.timestamp }),
+        minHistoryRequired: () => 50
     })).inSingletonScope();
 
     container.bind<RiskManager>(TYPES.RiskManager).toDynamicValue(() => {
@@ -100,7 +106,7 @@ export function createContainer(): Container {
             container.get<SimulatedExecutionEngine>(TYPES.ExecutionEngine),
             container.get<PortfolioManager>(TYPES.PortfolioManager),
             container.get<ConsoleNotifier>(TYPES.Notifier),
-            { interval: backtestConfig.interval }
+            { interval: backtestConfig.interval, isBacktest: backtestConfig.isBacktest }
         );
     }).inTransientScope();
 

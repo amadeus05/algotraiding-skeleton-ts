@@ -8,6 +8,8 @@ export const TYPES = {
     MarketDataRepository: Symbol.for("MarketDataRepository"),
     HistoricalMarketDataService: Symbol.for("HistoricalMarketDataService"),
     SimulationExchange: Symbol.for("SimulationExchange"),
+    /** DataProvider - централизованный источник данных с защитой от look-ahead bias */
+    DataProvider: Symbol.for("DataProvider"),
     Strategy: Symbol.for("Strategy"),
     RiskManager: Symbol.for("RiskManager"),
     ExecutionPlanner: Symbol.for("ExecutionPlanner"),

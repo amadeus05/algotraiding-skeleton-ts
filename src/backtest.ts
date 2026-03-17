@@ -9,6 +9,7 @@ import { HistoricalMarketDataService } from "./core/services/HistoricalMarketDat
 import { TYPES } from "./core/types/di.types";
 import { MigrationService } from "./infrastructure/persistence/MigrationService";
 import { SimulationExchange } from "./infrastructure/exchanges/simulation/SimulationExchange";
+import { DataProvider } from "./infrastructure/data/DataProvider";
 
 async function main(): Promise<void> {
     const container = createContainer();
@@ -47,8 +48,29 @@ async function main(): Promise<void> {
             console.log(`[backtest] cached candles in range: ${result.cachedCandles}`);
         }
 
+        // Инициализация DataProvider для защиты от look-ahead bias
+        const dataProvider = container.get<DataProvider>(TYPES.DataProvider);
+        const strategy = container.get<import("./core/interfaces/StrategyContract").StrategyContract>(TYPES.Strategy);
+
+        for (const symbol of symbols) {
+            // Регистрируем основной таймфрейм
+            await dataProvider.registerSymbol(symbol, interval);
+
+            // Регистрируем HTF если стратегия его требует
+            const htfInterval = strategy.higherTimeframeInterval?.();
+            if (htfInterval) {
+                await dataProvider.registerHigherTimeframe(symbol, {
+                    htfInterval,
+                    minRequiredHistory: 10
+                });
+            }
+        }
+
+        // Передаем DataProvider в BotRunner
         const simulationExchange = container.get<SimulationExchange>(TYPES.SimulationExchange);
         const botRunner = container.get<BotRunner>(TYPES.BotRunner);
+        botRunner.setDataProvider(dataProvider);
+
         const portfolioManager = container.get<import("./domain/execution/PortfolioManager").PortfolioManager>(TYPES.PortfolioManager);
         const runResult = await botRunner.runReplay(
             simulationExchange.streamHistoricalKlines({

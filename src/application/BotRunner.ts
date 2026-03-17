@@ -1,6 +1,7 @@
+import { DataProviderContract } from "../core/interfaces/DataProviderContract";
 import { ExecutionEngineContract } from "../core/interfaces/ExecutionEngineContract";
+import { FullStrategyContext, StrategyContract } from "../core/interfaces/StrategyContract";
 import { NotifierContract } from "../core/interfaces/NotifierContract";
-import { StrategyContract } from "../core/interfaces/StrategyContract";
 import { Candle, KlineInterval } from "../core/types/common";
 import { ClosedKlineEvent, StrategySignal, PortfolioSnapshot } from "../core/types/trading";
 import { ExecutionPlanner } from "../domain/execution/ExecutionPlanner";
@@ -37,7 +38,13 @@ export class BotRunner {
 
     // Batch buffering state for multi-symbol backtest (eliminates ordering bias)
     private currentBatchTimestamp: number | null = null;
-    private pendingBatchEvents: Array<{ event: ClosedKlineEvent; candle: Candle; history: Candle[] }> = [];
+    private pendingBatchEvents: Array<{ event: ClosedKlineEvent; candle: Candle; history: Candle[]; symbol: string }> = [];
+
+    // DataProvider гарантирует отсутствие look-ahead bias
+    private dataProvider: DataProviderContract | null = null;
+
+    // Execution metadata для стратегии
+    private isBacktestMode: boolean;
 
     constructor(
         private readonly strategy: StrategyContract,
@@ -46,11 +53,20 @@ export class BotRunner {
         private readonly executionEngine: ExecutionEngineContract,
         private readonly portfolioManager: PortfolioManager,
         private readonly notifier: NotifierContract,
-        options: BotRunnerOptions
+        options: BotRunnerOptions & { isBacktest?: boolean }
     ) {
         const intervalMs = intervalToMilliseconds(options.interval);
         this.pendingOrdersQueue = new PendingOrdersQueue({ intervalMs });
         this.batchProcessor = new SignalBatchProcessor(riskManager, executionPlanner);
+        this.isBacktestMode = options.isBacktest ?? true;
+    }
+
+    /**
+     * Устанавливает DataProvider для централизованного доступа к данным.
+     * DataProvider гарантирует отсутствие look-ahead bias и корректный HTF alignment.
+     */
+    public setDataProvider(dataProvider: DataProviderContract): void {
+        this.dataProvider = dataProvider;
     }
 
     public run(context: BotRunnerContext): BotRunResult {
@@ -159,21 +175,28 @@ export class BotRunner {
         // Update current batch state
         this.currentBatchTimestamp = eventTimestamp;
 
-        // Update history for this symbol
+        // Update history for this symbol (fallback mode если DataProvider не установлен)
         const history = historyBySymbol.get(event.symbol) ?? [];
         history.push(candle);
         historyBySymbol.set(event.symbol, history);
 
-        // Add to pending batch (batch will be processed when timestamp changes or at end)
-        this.pendingBatchEvents.push({ event, candle, history: [...history] });
+        // Add to pending batch - history передается для fallback mode
+        this.pendingBatchEvents.push({ event, candle, history: [...history], symbol: event.symbol });
     }
 
     /**
      * Flushes the current batch, processing all events at the same timestamp together.
      * This eliminates ordering bias between symbols.
+     *
+     * DataProvider (если установлен) гарантирует:
+     * - Point-in-time данные без look-ahead bias
+     * - Корректный HTF alignment если используется HTF
+     * - Валидацию достаточности истории
+     *
+     * Fallback mode (если DataProvider не установлен) использует history из событий.
      */
     private flushBatch(
-        historyBySymbol: Map<string, Candle[]>,
+        _historyBySymbol: Map<string, Candle[]>, // Legacy parameter для совместимости
         result: BotRunResult
     ): void {
         if (this.pendingBatchEvents.length === 0) {
@@ -183,7 +206,6 @@ export class BotRunner {
         const timestamp = this.currentBatchTimestamp!;
 
         // STEP 1: Execute pending orders at this candle's open
-        // (All symbols in batch use the same candle timestamp for open)
         const firstCandle = this.pendingBatchEvents[0].candle;
         this.executePendingOrders(firstCandle, result);
 
@@ -194,28 +216,69 @@ export class BotRunner {
         }
 
         // STEP 3: Get SINGLE portfolio snapshot for ALL signals in this batch
-        // This is crucial - all signals see the same portfolio state
         const portfolioSnapshot = this.portfolioManager.getSnapshot(timestamp);
 
         // STEP 4: Collect all entry signals from batch
         const signalEvaluations: SignalEvaluation[] = [];
         const exitSignals: Array<{ event: ClosedKlineEvent; candle: Candle }> = [];
 
-        for (const { event, candle, history } of this.pendingBatchEvents) {
+        for (const { event, candle, history: fallbackHistory } of this.pendingBatchEvents) {
             const position = this.portfolioManager.getPosition(event.symbol);
-            const signal = this.strategy.evaluate({
+
+            // Определяем историю: DataProvider приоритетнее fallback
+            const hasDataProvider = this.dataProvider !== null;
+            let history: Candle[];
+            let htfContext: FullStrategyContext["htf"] = undefined;
+
+            if (hasDataProvider) {
+                // Проверка достаточности данных через DataProvider
+                if (!this.dataProvider!.hasEnoughData(event.symbol, timestamp, this.strategy.minHistoryRequired())) {
+                    result.skippedSignals += 1;
+                    this.notifier.info(`[bot] ${event.symbol} signal skipped: insufficient history for strategy`);
+                    continue;
+                }
+
+                const preparedData = this.dataProvider!.getDataForTimestamp(event.symbol, timestamp);
+                if (preparedData) {
+                    history = preparedData.primary.closedHistory;
+                    if (preparedData.higherTimeframe) {
+                        htfContext = {
+                            interval: preparedData.higherTimeframe.interval,
+                            currentCandle: preparedData.higherTimeframe.currentHTFCandle,
+                            history: preparedData.higherTimeframe.closedHTFHistory,
+                            currentIndex: preparedData.higherTimeframe.currentIndex
+                        };
+                    }
+                } else {
+                    history = [];
+                }
+            } else {
+                // Fallback mode: используем history из события
+                history = fallbackHistory;
+            }
+
+            const strategyContext: FullStrategyContext = {
                 symbol: event.symbol,
-                timeframe: event.interval,
-                candle,
-                history: [...history],
+                timeframe: event.interval as KlineInterval,
+                candle: { ...candle },
+                history: history.map(c => ({ ...c })),
                 portfolio: portfolioSnapshot,
-                position
-            });
+                position,
+                execution: {
+                    isBacktest: this.isBacktestMode,
+                    defaultExecutionTiming: this.isBacktestMode ? "next_open" : "immediate",
+                    currentTimestamp: timestamp
+                },
+                htf: htfContext
+            };
+
+            const signal = this.strategy.evaluate(strategyContext);
 
             if (signal.action === "exit") {
                 exitSignals.push({ event, candle });
             } else if (signal.action === "enter") {
-                signalEvaluations.push({ event, candle, history: [...history], signal });
+                // Для SignalEvaluation используем ту же историю
+                signalEvaluations.push({ event, candle, history: strategyContext.history, signal });
             } else {
                 result.skippedSignals += 1;
             }
@@ -235,6 +298,7 @@ export class BotRunner {
         // Clear the batch
         this.pendingBatchEvents = [];
     }
+
 
     /**
      * Processes entry signals in batch, ensuring fair allocation of portfolio limits.
