@@ -2,11 +2,12 @@ import { ExecutionEngineContract } from "../core/interfaces/ExecutionEngineContr
 import { NotifierContract } from "../core/interfaces/NotifierContract";
 import { StrategyContract } from "../core/interfaces/StrategyContract";
 import { Candle, KlineInterval } from "../core/types/common";
-import { ClosedKlineEvent } from "../core/types/trading";
+import { ClosedKlineEvent, StrategySignal, PortfolioSnapshot } from "../core/types/trading";
 import { ExecutionPlanner } from "../domain/execution/ExecutionPlanner";
 import { ExecutableOrder, PendingOrdersQueue } from "../domain/execution/PendingOrdersQueue";
 import { PortfolioManager } from "../domain/execution/PortfolioManager";
 import { RiskManager } from "../domain/risk/RiskManager";
+import { SignalBatchProcessor, SignalEvaluation } from "../domain/execution/SignalBatchProcessor";
 import { intervalToMilliseconds } from "../utils/Helpers";
 
 export interface BotRunnerContext {
@@ -32,6 +33,11 @@ export interface BotRunnerOptions {
 
 export class BotRunner {
     private readonly pendingOrdersQueue: PendingOrdersQueue;
+    private readonly batchProcessor: SignalBatchProcessor;
+
+    // Batch buffering state for multi-symbol backtest (eliminates ordering bias)
+    private currentBatchTimestamp: number | null = null;
+    private pendingBatchEvents: Array<{ event: ClosedKlineEvent; candle: Candle; history: Candle[] }> = [];
 
     constructor(
         private readonly strategy: StrategyContract,
@@ -44,6 +50,7 @@ export class BotRunner {
     ) {
         const intervalMs = intervalToMilliseconds(options.interval);
         this.pendingOrdersQueue = new PendingOrdersQueue({ intervalMs });
+        this.batchProcessor = new SignalBatchProcessor(riskManager, executionPlanner);
     }
 
     public run(context: BotRunnerContext): BotRunResult {
@@ -72,6 +79,9 @@ export class BotRunner {
     }
 
     public async runReplay(events: AsyncIterable<ClosedKlineEvent> | Iterable<ClosedKlineEvent>): Promise<BotRunResult> {
+        // Reset batch state for fresh run
+        this.resetBatchState();
+
         if (Symbol.asyncIterator in Object(events)) {
             const asyncHistoryBySymbol = new Map<string, Candle[]>();
             const result = this.createEmptyResult();
@@ -80,13 +90,19 @@ export class BotRunner {
                 this.processEvent(event, asyncHistoryBySymbol, result);
             }
 
+            // Flush final batch to ensure all events are processed
+            this.flushBatch(asyncHistoryBySymbol, result);
+
             return result;
         }
 
         return this.runReplaySync(events as Iterable<ClosedKlineEvent>);
     }
 
-    private runReplaySync(events: Iterable<ClosedKlineEvent>): BotRunResult {
+    public runReplaySync(events: Iterable<ClosedKlineEvent>): BotRunResult {
+        // Reset batch state for fresh run
+        this.resetBatchState();
+
         const historyBySymbol = new Map<string, Candle[]>();
         const result = this.createEmptyResult();
 
@@ -94,7 +110,15 @@ export class BotRunner {
             this.processEvent(event, historyBySymbol, result);
         }
 
+        // Flush final batch to ensure all events are processed
+        this.flushBatch(historyBySymbol, result);
+
         return result;
+    }
+
+    private resetBatchState(): void {
+        this.currentBatchTimestamp = null;
+        this.pendingBatchEvents = [];
     }
 
     private createEmptyResult(): BotRunResult {
@@ -125,40 +149,169 @@ export class BotRunner {
             openInterest: event.kline.openInterest
         };
 
-        // STEP 1: Execute any pending orders at this candle's open (avoids look-ahead bias)
-        this.executePendingOrders(candle, result);
+        const eventTimestamp = event.kline.openTime;
 
-        // STEP 2: Update history and market prices
+        // If timestamp changed, flush the previous batch first
+        if (this.currentBatchTimestamp !== null && this.currentBatchTimestamp !== eventTimestamp) {
+            this.flushBatch(historyBySymbol, result);
+        }
+
+        // Update current batch state
+        this.currentBatchTimestamp = eventTimestamp;
+
+        // Update history for this symbol
         const history = historyBySymbol.get(event.symbol) ?? [];
-        result.processedCandles += 1;
         history.push(candle);
         historyBySymbol.set(event.symbol, history);
-        this.portfolioManager.updateMarketPrice(event.symbol, candle.close, candle.timestamp);
 
-        // STEP 3: Evaluate strategy on the closed candle
-        const portfolioSnapshot = this.portfolioManager.getSnapshot(candle.timestamp);
-        const position = this.portfolioManager.getPosition(event.symbol);
-        const signal = this.strategy.evaluate({
-            symbol: event.symbol,
-            timeframe: event.interval,
-            candle,
-            history: [...history],
-            portfolio: portfolioSnapshot,
-            position
-        });
+        // Add to pending batch (batch will be processed when timestamp changes or at end)
+        this.pendingBatchEvents.push({ event, candle, history: [...history] });
+    }
 
-        // STEP 4: Handle signals
-        if (signal.action === "hold") {
-            result.skippedSignals += 1;
+    /**
+     * Flushes the current batch, processing all events at the same timestamp together.
+     * This eliminates ordering bias between symbols.
+     */
+    private flushBatch(
+        historyBySymbol: Map<string, Candle[]>,
+        result: BotRunResult
+    ): void {
+        if (this.pendingBatchEvents.length === 0) {
             return;
         }
 
-        if (signal.action === "exit") {
+        const timestamp = this.currentBatchTimestamp!;
+
+        // STEP 1: Execute pending orders at this candle's open
+        // (All symbols in batch use the same candle timestamp for open)
+        const firstCandle = this.pendingBatchEvents[0].candle;
+        this.executePendingOrders(firstCandle, result);
+
+        // STEP 2: Update market prices for ALL symbols in batch
+        for (const { event, candle } of this.pendingBatchEvents) {
+            this.portfolioManager.updateMarketPrice(event.symbol, candle.close, candle.timestamp);
+            result.processedCandles += 1;
+        }
+
+        // STEP 3: Get SINGLE portfolio snapshot for ALL signals in this batch
+        // This is crucial - all signals see the same portfolio state
+        const portfolioSnapshot = this.portfolioManager.getSnapshot(timestamp);
+
+        // STEP 4: Collect all entry signals from batch
+        const signalEvaluations: SignalEvaluation[] = [];
+        const exitSignals: Array<{ event: ClosedKlineEvent; candle: Candle }> = [];
+
+        for (const { event, candle, history } of this.pendingBatchEvents) {
+            const position = this.portfolioManager.getPosition(event.symbol);
+            const signal = this.strategy.evaluate({
+                symbol: event.symbol,
+                timeframe: event.interval,
+                candle,
+                history: [...history],
+                portfolio: portfolioSnapshot,
+                position
+            });
+
+            if (signal.action === "exit") {
+                exitSignals.push({ event, candle });
+            } else if (signal.action === "enter") {
+                signalEvaluations.push({ event, candle, history: [...history], signal });
+            } else {
+                result.skippedSignals += 1;
+            }
+        }
+
+        // STEP 5: Process exit signals immediately (they don't compete for slots)
+        for (const { event, candle } of exitSignals) {
+            const position = this.portfolioManager.getPosition(event.symbol);
             this.handleExitSignal(event.symbol, position, candle, result);
+        }
+
+        // STEP 6: Batch process entry signals with fair portfolio limit allocation
+        if (signalEvaluations.length > 0) {
+            this.processEntrySignalsBatch(signalEvaluations, portfolioSnapshot, result);
+        }
+
+        // Clear the batch
+        this.pendingBatchEvents = [];
+    }
+
+    /**
+     * Processes entry signals in batch, ensuring fair allocation of portfolio limits.
+     * All signals are evaluated against the same portfolio snapshot.
+     */
+    private processEntrySignalsBatch(
+        evaluations: SignalEvaluation[],
+        portfolioSnapshot: PortfolioSnapshot,
+        result: BotRunResult
+    ): void {
+        // Import type locally to avoid circular dependency issues
+        type ExecutionPlan = import("../core/types/trading").ExecutionPlan;
+        // Use batch processor to evaluate all signals against same snapshot
+        const batchResult = this.batchProcessor.processBatch(
+            evaluations,
+            portfolioSnapshot,
+            this.riskManager.maxOpenTrades
+        );
+
+        // Handle approved signals
+        for (const approved of batchResult.approvedEvaluations) {
+            const { event, signal } = approved.evaluation;
+            const position = this.portfolioManager.getPosition(event.symbol);
+
+            result.entrySignals += 1;
+
+            if (position) {
+                // Should not happen due to portfolio limits, but safety check
+                result.skippedSignals += 1;
+                this.notifier.info(`[bot] ${event.symbol} entry signal ignored: position already open`);
+                continue;
+            }
+
+            result.approvedEntries += 1;
+            this.executeEntrySignal(event, signal, approved.executionPlan!, approved.evaluation.candle, result);
+        }
+
+        // Handle rejected signals
+        for (const rejected of batchResult.rejectedEvaluations) {
+            const { event, signal } = rejected.evaluation;
+            result.entrySignals += 1;
+            result.rejectedSignals += 1;
+            this.notifier.warn(`[bot] ${event.symbol} signal rejected: ${rejected.riskDecision.reason}`);
+        }
+    }
+
+    private executeEntrySignal(
+        event: ClosedKlineEvent,
+        signal: StrategySignal,
+        executionPlan: import("../core/types/trading").ExecutionPlan,
+        candle: Candle,
+        result: BotRunResult
+    ): void {
+        // For "next_open" execution timing (backtest default), queue for next candle
+        if (executionPlan.executionTiming === "next_open") {
+            const pendingOrder = this.pendingOrdersQueue.queueForNextOpen(
+                executionPlan,
+                candle.timestamp // Current candle close time = next candle open time target
+            );
+            result.pendingOrdersCreated += 1;
+            this.notifier.info(
+                `[bot] ${event.symbol} ${executionPlan.side} entry queued ` +
+                `qty=${executionPlan.quantity} for execution at next candle open ` +
+                `(target: ${new Date(pendingOrder.targetCandleOpenTime).toISOString()})`
+            );
             return;
         }
 
-        this.handleEntrySignal(event, signal, portfolioSnapshot, position, candle, result);
+        // For "immediate" execution timing (live trading), execute right away
+        const order = this.executionEngine.execute(executionPlan, candle);
+        this.portfolioManager.applyExecution(order);
+
+        result.executedOrders += 1;
+        this.notifier.info(
+            `[bot] ${event.symbol} ${executionPlan.side} entry executed ` +
+            `qty=${executionPlan.quantity} price=${executionPlan.entryPrice} (immediate execution)`
+        );
     }
 
     private executePendingOrders(candle: Candle, result: BotRunResult): void {
@@ -194,59 +347,5 @@ export class BotRunner {
         this.portfolioManager.applyExecution(closeOrder);
         result.executedOrders += 1;
         this.notifier.info(`[bot] ${symbol} exit executed at ${closeOrder.price}`);
-    }
-
-    private handleEntrySignal(
-        event: ClosedKlineEvent,
-        signal: import("../core/types/trading").StrategySignal,
-        portfolioSnapshot: import("../core/types/trading").PortfolioSnapshot,
-        position: import("../core/types/trading").Position | undefined,
-        candle: Candle,
-        result: BotRunResult
-    ): void {
-        result.entrySignals += 1;
-
-        if (position) {
-            result.skippedSignals += 1;
-            this.notifier.info(`[bot] ${event.symbol} entry signal ignored: position already open`);
-            return;
-        }
-
-        const riskDecision = this.riskManager.assessSignal(signal, portfolioSnapshot);
-
-        if (!riskDecision.approved) {
-            result.rejectedSignals += 1;
-            this.notifier.warn(`[bot] ${event.symbol} signal rejected: ${riskDecision.reason}`);
-            return;
-        }
-
-        const executionPlan = this.executionPlanner.buildEntryPlan(signal, riskDecision);
-
-        // For "next_open" execution timing (backtest default), queue for next candle
-        if (executionPlan.executionTiming === "next_open") {
-            const pendingOrder = this.pendingOrdersQueue.queueForNextOpen(
-                executionPlan,
-                candle.timestamp // Current candle close time = next candle open time target
-            );
-            result.approvedEntries += 1;
-            result.pendingOrdersCreated += 1;
-            this.notifier.info(
-                `[bot] ${event.symbol} ${executionPlan.side} entry queued ` +
-                `qty=${executionPlan.quantity} for execution at next candle open ` +
-                `(target: ${new Date(pendingOrder.targetCandleOpenTime).toISOString()})`
-            );
-            return;
-        }
-
-        // For "immediate" execution timing (live trading), execute right away
-        const order = this.executionEngine.execute(executionPlan, candle);
-        this.portfolioManager.applyExecution(order);
-
-        result.approvedEntries += 1;
-        result.executedOrders += 1;
-        this.notifier.info(
-            `[bot] ${event.symbol} ${executionPlan.side} entry executed ` +
-            `qty=${executionPlan.quantity} price=${executionPlan.entryPrice} (immediate execution)`
-        );
     }
 }

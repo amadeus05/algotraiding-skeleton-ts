@@ -4,6 +4,10 @@ import { PortfolioSnapshot, RiskDecision, StrategySignal, TradeSide } from "../.
 export class RiskManager {
     constructor(private readonly riskParameters: RiskParameters) {}
 
+    public get maxOpenTrades(): number {
+        return this.riskParameters.maxOpenTrades;
+    }
+
     public assessSignal(signal: StrategySignal, portfolio: PortfolioSnapshot): RiskDecision {
         if (signal.action !== "enter") {
             return this.reject("Only entry signals can be assessed for position risk.");
