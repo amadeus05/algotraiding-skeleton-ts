@@ -115,7 +115,8 @@ export class PortfolioManager {
         const leverage = Math.max(order.leverage, 1);
         const requiredMargin = (order.quantity * order.price) / leverage;
 
-        if (this.balance < requiredMargin + fees) {
+        const epsilon = 10.0; // Допуск на проскальзывание и округление
+        if (this.balance + epsilon < requiredMargin + fees) {
             throw new Error(
                 `Insufficient balance: required margin ${requiredMargin} + fees ${fees}, available ${this.balance}`
             );

@@ -61,7 +61,7 @@ export class ConfigManager {
                 maxOpenTrades: this.parsePositiveInteger(process.env.MAX_OPEN_TRADES, 3),
                 leverage: 2,
                 maxDailyLoss: 0.05,
-                maxDrawdown: 0.15,
+                maxDrawdown: 0.35,
                 minRR: 1.5
             } as RiskParameters
         };

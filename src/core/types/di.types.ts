@@ -1,4 +1,5 @@
 export const TYPES = {
+    BacktestTradeLogger: Symbol.for("BacktestTradeLogger"),
     ConfigManager: Symbol.for("ConfigManager"),
     Exchange: Symbol.for("Exchange"),
     BinanceService: Symbol.for("BinanceService"),
