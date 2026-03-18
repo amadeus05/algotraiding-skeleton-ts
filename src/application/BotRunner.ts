@@ -156,6 +156,8 @@ export class BotRunner {
         this.currentBatchTimestamp = null;
         this.pendingBatchEvents = [];
         this.pendingExitOrders.clear();
+        this.pendingOrdersQueue.clear();
+        this.pendingExitIdCounter = 0;
     }
 
     private createEmptyResult(): BotRunResult {
