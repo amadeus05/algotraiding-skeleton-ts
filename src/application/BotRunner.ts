@@ -90,6 +90,8 @@ export class BotRunner {
     }
 
     public run(context: BotRunnerContext): BotRunResult {
+        const intervalMs = intervalToMilliseconds(context.timeframe as KlineInterval);
+
         const events: ClosedKlineEvent[] = context.candles.map((candle) => ({
             exchange: "simulation",
             symbol: context.symbol,
@@ -99,7 +101,7 @@ export class BotRunner {
                 symbol: context.symbol,
                 interval: context.timeframe,
                 openTime: candle.timestamp,
-                closeTime: candle.timestamp,
+                closeTime: candle.timestamp + intervalMs - 1,
                 open: candle.open,
                 high: candle.high,
                 low: candle.low,
