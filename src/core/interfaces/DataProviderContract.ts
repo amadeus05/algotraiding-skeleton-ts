@@ -49,14 +49,13 @@ export interface PreparedData {
     };
 }
 
-/**
- * Опции для HTF alignment
- */
 export interface HTFAlignmentOptions {
     /** HTF интервал (например, "1h" для основного "15m") */
     htfInterval: KlineInterval;
     /** Сколько закрытых HTF свечей минимально требуется для валидации */
     minRequiredHistory?: number;
+    startTime?: number;
+    endTime?: number;
 }
 
 /**
@@ -67,7 +66,7 @@ export interface DataProviderContract {
      * Регистрирует символ и таймфрейм для отслеживания.
      * Загружает данные из репозитория.
      */
-    registerSymbol(symbol: string, interval: KlineInterval): Promise<void>;
+    registerSymbol(symbol: string, interval: KlineInterval, startTime?: number, endTime?: number): Promise<void>;
 
     /**
      * Регистрирует HTF для указанного символа.
