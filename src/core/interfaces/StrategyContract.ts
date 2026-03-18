@@ -86,4 +86,12 @@ export interface StrategyContract {
      * DataProvider автоматически подготовит HTF данные.
      */
     higherTimeframeInterval?(): KlineInterval | undefined;
+
+    /**
+     * Минимальное количество HTF свечей, необходимое для работы индикаторов.
+     * Должно быть не меньше максимального окна HTF-индикаторов с запасом.
+     * Например, если HTF использует EMA20, то вернуть хотя бы 30-50.
+     * Если не указано, используется значение по умолчанию.
+     */
+    higherTimeframeMinHistory?(): number;
 }
